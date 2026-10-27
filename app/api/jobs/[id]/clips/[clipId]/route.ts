@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { jsonError } from '@/lib/server/http'
-import { CLIP_ID_RE, deleteClip, jobDir, loadJob, toPublic } from '@/lib/server/store'
+import { CLIP_ID_RE, deleteClip, jobDir, loadJob, orderedClips, toPublic } from '@/lib/server/store'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -22,12 +22,12 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string;
   }
 
   const download = new URL(request.url).searchParams.get('download') === '1'
-  const base = (job.sourceName || 'clip').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_').slice(0, 40)
+  const number = orderedClips(job).findIndex((c) => c.id === clipId) + 1 // 1.mp4, 2.mp4, ... in clip order
   const headers: Record<string, string> = {
     'Content-Type': 'video/mp4',
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'private, max-age=3600',
-    'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${base}-${clipId}.mp4"`,
+    'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${number}.mp4"`,
   }
 
   const range = /^bytes=(\d*)-(\d*)$/.exec(request.headers.get('range') ?? '')

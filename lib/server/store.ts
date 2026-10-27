@@ -310,6 +310,18 @@ export function listJobs(limit = 200): JobRecord[] {
   return jobs
 }
 
+/** Clips in play order (clip index). The download number everywhere (1.mp4, 2.mp4, ...) is the position in this list + 1. */
+export function orderedClips(job: JobRecord) {
+  const sequence = (id: string) => Number(/^clip-(\d+)$/.exec(id)?.[1] ?? Number.MAX_SAFE_INTEGER)
+  return [...job.clips].sort((a, b) => sequence(a.id) - sequence(b.id))
+}
+
+/** Filesystem-safe name for downloads. */
+export function safeDownloadName(value: string, fallback: string) {
+  const cleaned = value.replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_').replace(/^[._]+|[._]+$/g, '').slice(0, 60)
+  return cleaned || fallback
+}
+
 export function toPublic(job: JobRecord): Job {
   return {
     id: job.id,
