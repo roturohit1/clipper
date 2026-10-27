@@ -2,10 +2,41 @@
 
 import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, type AppConfig, type Job } from '@/lib/api'
+import { CAPTION_POSITIONS, COLOR_PRESETS, DEFAULT_CAPTION_OPTIONS, type CaptionOptions } from '@/lib/captions'
 
 const formatBytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`
 const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|flv|ts|mpg|mpeg|3gp|ogv|wmv)$/i
 const LAST_JOB_KEY = 'cutline:lastJobId'
+const HEX_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i
+
+/** Colour preset picker: '' = style default, a preset name, or a custom #hex value. */
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const custom = value.startsWith('#')
+  const swatch = (selected: boolean) => `size-7 rounded-full border border-border transition ${selected ? 'ring-2 ring-primary ring-offset-2 ring-offset-background' : 'hover:scale-105'}`
+  return (
+    <div className="flex flex-col gap-2 text-xs font-medium">
+      {label}
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" aria-pressed={value === ''} onClick={() => onChange('')} className={`h-7 rounded-full border px-3 text-[11px] font-medium ${value === '' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'}`}>Default</button>
+        {Object.entries(COLOR_PRESETS).map(([name, hex]) => (
+          <button key={name} type="button" title={name} aria-label={name} aria-pressed={value === name} onClick={() => onChange(name)} className={swatch(value === name)} style={{ backgroundColor: hex }} />
+        ))}
+        <label className={`${swatch(custom)} relative grid cursor-pointer place-items-center overflow-hidden`} title="Custom colour" style={{ background: custom ? value : 'conic-gradient(red, yellow, lime, cyan, blue, magenta, red)' }}>
+          <input type="color" aria-label={`${label} custom colour`} value={HEX_RE.test(value) && value.length === 7 ? value : '#ff8800'} onChange={(event) => onChange(event.target.value)} className="absolute inset-0 size-full cursor-pointer opacity-0" />
+        </label>
+      </div>
+      {custom && <input type="text" aria-label={`${label} hex code`} value={value} maxLength={7} onChange={(event) => onChange(`#${event.target.value.replace(/[^0-9a-f]/gi, '')}`)} placeholder="#FF8800" className={`h-9 w-28 rounded-lg border bg-background px-3 font-mono text-xs font-normal outline-none focus:border-primary ${HEX_RE.test(value) ? 'border-input' : 'border-destructive'}`} />}
+    </div>
+  )
+}
+
+type CaptionForm = { enabled: boolean; uppercase: 'auto' | 'on' | 'off'; textColor: string; highlightColor: string; size: CaptionOptions['size']; position: CaptionOptions['position']; emoji: boolean }
+const DEFAULT_CAPTION_FORM: CaptionForm = { enabled: DEFAULT_CAPTION_OPTIONS.enabled, uppercase: 'auto', textColor: '', highlightColor: '', size: DEFAULT_CAPTION_OPTIONS.size, position: DEFAULT_CAPTION_OPTIONS.position, emoji: DEFAULT_CAPTION_OPTIONS.emoji }
+
+function toCaptionOptions(form: CaptionForm): CaptionOptions {
+  const colour = (value: string) => (value === '' ? null : value in COLOR_PRESETS ? COLOR_PRESETS[value as keyof typeof COLOR_PRESETS] : value)
+  return { enabled: form.enabled, uppercase: form.uppercase === 'auto' ? 'auto' : form.uppercase === 'on', textColor: colour(form.textColor), highlightColor: colour(form.highlightColor), size: form.size, position: form.position, emoji: form.emoji }
+}
 
 export default function Page() {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -14,6 +45,8 @@ export default function Page() {
   const [url, setUrl] = useState('')
   const [clipLength, setClipLength] = useState('45')
   const [subtitleStyle, setSubtitleStyle] = useState('bold')
+  const [captionForm, setCaptionForm] = useState<CaptionForm>(DEFAULT_CAPTION_FORM)
+  const setCaption = <K extends keyof CaptionForm>(key: K, value: CaptionForm[K]) => setCaptionForm((current) => ({ ...current, [key]: value }))
   const [job, setJob] = useState<Job | null>(null)
   const [error, setError] = useState('')
   const [dragging, setDragging] = useState(false)
@@ -68,6 +101,13 @@ export default function Page() {
     }
   })()
   const progress = job?.progress ?? 0
+  const orderedClips = useMemo(
+    () => [...(job?.clips ?? [])].sort((a, b) => {
+      const sequence = (id: string) => Number(/^clip-(\d+)$/.exec(id)?.[1] ?? Number.MAX_SAFE_INTEGER)
+      return sequence(a.id) - sequence(b.id)
+    }),
+    [job?.clips],
+  )
 
   const statusLabel = useMemo(() => {
     if (isSubmitting) return 'Submitting source'
@@ -89,11 +129,15 @@ export default function Page() {
   const submit = async () => {
     setError('')
     if (!canSubmit) return setError(mode === 'upload' ? 'Add a video file first.' : 'Enter a valid video URL.')
+    for (const [label, value] of [['Text colour', captionForm.textColor], ['Highlight colour', captionForm.highlightColor]]) {
+      if (value.startsWith('#') && !HEX_RE.test(value)) return setError(`${label} must be a hex code like #FF8800.`)
+    }
     setIsSubmitting(true)
     try {
+      const options = { clipLength: Number(clipLength), subtitleStyle, captions: toCaptionOptions(captionForm) }
       const nextJob = mode === 'upload'
-        ? await apiClient.createUploadJob(file!, { clipLength: Number(clipLength), subtitleStyle })
-        : await apiClient.createUrlJob(normalizedUrl, { clipLength: Number(clipLength), subtitleStyle })
+        ? await apiClient.createUploadJob(file!, options)
+        : await apiClient.createUrlJob(normalizedUrl, options)
       setJob(nextJob)
       window.localStorage.setItem(LAST_JOB_KEY, nextJob.id)
     } catch (caught) {
@@ -154,10 +198,21 @@ export default function Page() {
                 {error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">{error}</p>}
               </section>
 
-              <section className="rounded-2xl border border-border/80 bg-card/60 p-5 md:p-6"><div className="mb-6"><p className="text-sm font-semibold">Clip settings</p><p className="mt-1 text-xs text-muted-foreground">Tune the output for your audience.</p></div><div className="flex flex-col gap-5"><label className="flex flex-col gap-2 text-xs font-medium">Target clip length<select value={clipLength} onChange={(event) => setClipLength(event.target.value)} className="h-11 rounded-lg border border-input bg-background px-3 text-sm font-normal outline-none focus:border-primary"><option value="30">30 seconds</option><option value="45">45 seconds</option><option value="60">60 seconds</option><option value="90">90 seconds</option></select></label><label className="flex flex-col gap-2 text-xs font-medium">Subtitle style<select value={subtitleStyle} onChange={(event) => setSubtitleStyle(event.target.value)} className="h-11 rounded-lg border border-input bg-background px-3 text-sm font-normal outline-none focus:border-primary"><option value="bold">Bold creator</option><option value="clean">Clean minimal</option><option value="karaoke">Karaoke highlight</option></select></label><button onClick={submit} disabled={isSubmitting || active} className="mt-2 flex h-12 items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60">{isSubmitting ? 'Submitting…' : active ? 'Processing…' : 'Generate clips'}<span className="ml-2">→</span></button><p className="text-center text-[11px] leading-4 text-muted-foreground">Your original file stays private and is processed on your own server.</p></div></section>
+              <section className="rounded-2xl border border-border/80 bg-card/60 p-5 md:p-6"><div className="mb-6"><p className="text-sm font-semibold">Clip settings</p><p className="mt-1 text-xs text-muted-foreground">Tune the output for your audience.</p></div><div className="flex flex-col gap-5"><label className="flex flex-col gap-2 text-xs font-medium">Target clip length<select value={clipLength} onChange={(event) => setClipLength(event.target.value)} className="h-11 rounded-lg border border-input bg-background px-3 text-sm font-normal outline-none focus:border-primary"><option value="30">30 seconds</option><option value="45">45 seconds</option><option value="60">60 seconds</option><option value="90">90 seconds</option></select></label><label className="flex flex-col gap-2 text-xs font-medium">Subtitle style<select value={subtitleStyle} onChange={(event) => setSubtitleStyle(event.target.value)} className="h-11 rounded-lg border border-input bg-background px-3 text-sm font-normal outline-none focus:border-primary"><option value="bold">Bold creator</option><option value="clean">Clean minimal</option><option value="karaoke">Karaoke highlight</option></select></label>
+                <div className="flex flex-col gap-4 rounded-xl border border-border/70 bg-background/40 p-4" aria-label="Caption options">
+                  <label className="flex items-center justify-between gap-3 text-xs font-medium">Burn in captions<input type="checkbox" checked={captionForm.enabled} onChange={(event) => setCaption('enabled', event.target.checked)} className="size-4 accent-[var(--primary)]" /></label>
+                  {captionForm.enabled && <>
+                    <ColorField label="Text colour" value={captionForm.textColor} onChange={(value) => setCaption('textColor', value)} />
+                    <ColorField label="Highlight colour" value={captionForm.highlightColor} onChange={(value) => setCaption('highlightColor', value)} />
+                    <label className="flex flex-col gap-2 text-xs font-medium">Font size<select value={captionForm.size} onChange={(event) => setCaption('size', event.target.value as CaptionForm['size'])} className="h-10 rounded-lg border border-input bg-background px-3 text-sm font-normal outline-none focus:border-primary"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option><option value="xl">XL</option></select></label>
+                    <div className="flex flex-col gap-2 text-xs font-medium">Position<div className="flex rounded-lg bg-muted/60 p-1" role="radiogroup" aria-label="Caption position">{CAPTION_POSITIONS.map((position) => <button key={position} type="button" role="radio" aria-checked={captionForm.position === position} onClick={() => setCaption('position', position)} className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium capitalize transition ${captionForm.position === position ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}>{position}</button>)}</div></div>
+                    <label className="flex flex-col gap-2 text-xs font-medium">Letter case<select value={captionForm.uppercase} onChange={(event) => setCaption('uppercase', event.target.value as CaptionForm['uppercase'])} className="h-10 rounded-lg border border-input bg-background px-3 text-sm font-normal outline-none focus:border-primary"><option value="auto">Match style</option><option value="on">UPPERCASE</option><option value="off">As spoken</option></select></label>
+                    <label className="flex items-center justify-between gap-3 text-xs font-medium"><span>Emoji captions<span className="mt-0.5 block text-[11px] font-normal text-muted-foreground">AI adds fitting emojis to caption lines</span></span><input type="checkbox" checked={captionForm.emoji} onChange={(event) => setCaption('emoji', event.target.checked)} className="size-4 accent-[var(--primary)]" /></label>
+                  </>}
+                </div><button onClick={submit} disabled={isSubmitting || active} className="mt-2 flex h-12 items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60">{isSubmitting ? 'Submitting…' : active ? 'Processing…' : 'Generate clips'}<span className="ml-2">→</span></button><p className="text-center text-[11px] leading-4 text-muted-foreground">Your original file stays private and is processed on your own server.</p></div></section>
             </div>
 
-            <section className="mt-8 rounded-2xl border border-border/80 bg-card/40 p-5 md:p-6"><div className="flex items-center justify-between"><div><p className="text-sm font-semibold">Latest project</p><p className="mt-1 text-xs text-muted-foreground">{statusLabel}</p></div>{job && <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">{job.status}</span>}</div>{job ? <div className="mt-5"><div className="mb-2 flex justify-between text-xs text-muted-foreground"><span>{job.status === 'failed' ? 'Processing stopped' : job.stage || 'Processing progress'}</span><span>{progress}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${progress}%` }} /></div>{job.status === 'failed' && job.error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">{job.error}</p>}{job.warnings?.length ? <div className="mt-4 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs leading-5 text-muted-foreground">{job.warnings.map((warning) => <p key={warning}>• {warning}</p>)}</div> : null}{job.clips?.length ? <div className="mt-6 grid gap-4 sm:grid-cols-2"><p className="col-span-full text-sm font-medium">Generated clips</p>{job.clips.map((clip) => <article key={clip.id} className="overflow-hidden rounded-xl border border-border bg-background"><video controls preload="metadata" src={clip.previewUrl} className="aspect-video w-full bg-black" /><div className="flex items-center justify-between gap-3 p-3"><div><p className="text-xs font-medium">{clip.title}</p><p className="mt-1 text-[11px] text-muted-foreground">{clip.durationSeconds}s · {clip.sourceStartSeconds}s source{clip.captioned ? ' · captions' : ''}</p>{clip.reason && <p className="mt-1 text-[11px] leading-4 text-muted-foreground/80">{clip.reason}</p>}</div><a href={clip.downloadUrl} download className="rounded-lg bg-muted px-3 py-2 text-xs font-semibold hover:bg-muted/70">Download</a></div></article>)}</div> : <p className="mt-5 text-sm text-muted-foreground">{job.status === 'failed' ? 'No clips were produced.' : 'Clip previews will appear here as soon as they are rendered.'}</p>}</div> : <div className="mt-5 rounded-xl border border-dashed border-border px-5 py-8 text-center"><p className="text-sm font-medium">No project yet</p><p className="mt-1 text-xs text-muted-foreground">Your processing queue and finished clips will appear here.</p></div>}</section>
+            <section className="mt-8 rounded-2xl border border-border/80 bg-card/40 p-5 md:p-6"><div className="flex items-center justify-between"><div><p className="text-sm font-semibold">Latest project</p><p className="mt-1 text-xs text-muted-foreground">{statusLabel}</p></div>{job && <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">{job.status}</span>}</div>{job ? <div className="mt-5"><div className="mb-2 flex justify-between text-xs text-muted-foreground"><span>{job.status === 'failed' ? 'Processing stopped' : job.stage || 'Processing progress'}</span><span>{progress}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${progress}%` }} /></div>{job.status === 'failed' && job.error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">{job.error}</p>}{job.warnings?.length ? <div className="mt-4 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs leading-5 text-muted-foreground">{job.warnings.map((warning) => <p key={warning}>• {warning}</p>)}</div> : null}{job.clips?.length ? <div className="mt-6 grid gap-4 sm:grid-cols-2"><p className="col-span-full text-sm font-medium">Generated clips</p>{orderedClips.map((clip, index) => <article key={clip.id} className="overflow-hidden rounded-xl border border-border bg-background"><video controls preload="metadata" src={clip.previewUrl} className="aspect-video w-full bg-black" /><div className="flex items-center justify-between gap-3 p-3"><div><p className="text-xs font-medium">Clip {index + 1}: {clip.title}</p><p className="mt-1 text-[11px] text-muted-foreground">{clip.durationSeconds}s · {clip.sourceStartSeconds}s source{clip.captioned ? ' · captions' : ''}</p>{clip.reason && <p className="mt-1 text-[11px] leading-4 text-muted-foreground/80">{clip.reason}</p>}</div><a href={clip.downloadUrl} download className="rounded-lg bg-muted px-3 py-2 text-xs font-semibold hover:bg-muted/70">Download</a></div></article>)}</div> : <p className="mt-5 text-sm text-muted-foreground">{job.status === 'failed' ? 'No clips were produced.' : 'Clip previews will appear here as soon as they are rendered.'}</p>}</div> : <div className="mt-5 rounded-xl border border-dashed border-border px-5 py-8 text-center"><p className="text-sm font-medium">No project yet</p><p className="mt-1 text-xs text-muted-foreground">Your processing queue and finished clips will appear here.</p></div>}</section>
             </>}
           </div>
         </section>

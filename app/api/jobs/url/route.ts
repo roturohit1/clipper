@@ -7,10 +7,10 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function POST(request: Request) {
-  const body = (await request.json().catch(() => null)) as { url?: string; clip_length?: unknown; subtitle_style?: unknown } | null
+  const body = (await request.json().catch(() => null)) as ({ url?: string; clip_length?: unknown; subtitle_style?: unknown } & Record<string, unknown>) | null
   if (!body?.url || typeof body.url !== 'string') return jsonError('A video URL is required.')
   try {
-    const options = parseOptions(body.clip_length, body.subtitle_style)
+    const options = parseOptions(body.clip_length, body.subtitle_style, body)
     const url = await assertPublicUrl(body.url.trim())
     const job = newJob(options, { type: 'url', url: url.toString() }, url.hostname + url.pathname)
     enqueue(job.id)

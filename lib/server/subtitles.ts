@@ -1,3 +1,4 @@
+import { DEFAULT_CAPTION_OPTIONS, SIZE_SCALE, type CaptionOptions } from '../captions'
 import type { Segment, Word } from './transcribe'
 
 export type SubtitleStyle = 'bold' | 'clean' | 'karaoke'
@@ -45,7 +46,7 @@ function wordsInRange(segments: Segment[], start: number, end: number): Word[] {
 
 type Cue = { start: number; end: number; words: Word[] }
 
-function buildCues(words: Word[]): Cue[] {
+function buildCues(words: Word[], maxWords = 7): Cue[] {
   const cues: Cue[] = []
   let current: Word[] = []
   const flush = () => {
@@ -54,7 +55,7 @@ function buildCues(words: Word[]): Cue[] {
   }
   for (const w of words) {
     const last = current[current.length - 1]
-    if (last && (w.start - last.end > 0.8 || current.length >= 7 || w.end - current[0].start > 3.4)) flush()
+    if (last && (w.start - last.end > 0.8 || current.length >= maxWords || w.end - current[0].start > 3.4)) flush()
     current.push(w)
     if (current.length >= 3 && /[.!?]$/.test(w.word)) flush()
   }
@@ -62,37 +63,79 @@ function buildCues(words: Word[]): Cue[] {
   return cues
 }
 
-/** Build an ASS subtitle file for one clip. Returns null if there is no speech in range. */
-export function buildAss(segments: Segment[], clipStart: number, clipEnd: number, style: SubtitleStyle, width: number, height: number): string | null {
+/** Larger text needs fewer words per caption line so it still fits on screen. Medium and below keep the original 7. */
+const maxWordsFor = (caption: CaptionOptions) => (caption.size === 'xl' ? 4 : caption.size === 'large' ? 5 : 7)
+
+function clipCues(segments: Segment[], clipStart: number, clipEnd: number, caption: CaptionOptions): Cue[] {
   const words = wordsInRange(segments, clipStart, clipEnd).map((w) => ({ ...w, start: w.start - clipStart, end: Math.min(w.end, clipEnd) - clipStart }))
-  const cues = buildCues(words)
+  return buildCues(words, maxWordsFor(caption))
+}
+
+/** The plain text of every caption line of a clip (same order as buildAss), e.g. to ask an LLM for emojis. */
+export function captionLines(segments: Segment[], clipStart: number, clipEnd: number, caption: CaptionOptions = DEFAULT_CAPTION_OPTIONS): string[] {
+  return clipCues(segments, clipStart, clipEnd, caption).map((cue) => cue.words.map((w) => w.word).join(' '))
+}
+
+/** #RRGGBB -> ASS &HAABBGGRR */
+const ass = (hex: string, alpha = '00') => `&H${alpha}${hex.slice(5, 7)}${hex.slice(3, 5)}${hex.slice(1, 3)}`
+
+/**
+ * Build an ASS subtitle file for one clip. Returns null if there is no speech in range.
+ * `emojis` holds one emoji string per caption line (see captionLines); the defaults reproduce the original output.
+ */
+export function buildAss(
+  segments: Segment[],
+  clipStart: number,
+  clipEnd: number,
+  style: SubtitleStyle,
+  width: number,
+  height: number,
+  caption: CaptionOptions = DEFAULT_CAPTION_OPTIONS,
+  emojis: string[] = [],
+): string | null {
+  const cues = clipCues(segments, clipStart, clipEnd, caption)
   if (!cues.length) return null
 
-  const base = Math.round(Math.min(width, height * 1.6) * (style === 'bold' ? 0.055 : 0.042))
+  const base = Math.round(Math.min(width, height * 1.6) * (style === 'bold' ? 0.055 : 0.042) * SIZE_SCALE[caption.size])
+  const upper = caption.uppercase === 'auto' ? style === 'bold' : caption.uppercase
+  // karaoke fills words with the highlight colour (default yellow); other styles only highlight when a highlight colour is chosen.
+  const highlight = caption.highlightColor ?? (style === 'karaoke' ? '#FFE500' : null)
+  const text = caption.textColor ?? '#FFFFFF'
+  const progressive = style === 'karaoke' || Boolean(highlight)
+  const primary = progressive && highlight ? ass(highlight) : ass(text)
+  const secondary = ass(text)
+  // 2 = bottom centre, 5 = middle centre, 8 = top centre
+  const alignment = caption.position === 'top' ? 8 : caption.position === 'middle' ? 5 : 2
+  const margin = (ratio: number) => (caption.position === 'middle' ? 0 : Math.round(height * ratio))
   const styles: Record<SubtitleStyle, string> = {
     // &HAABBGGRR
-    bold: `Style: Default,Arial,${base},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${Math.max(2, Math.round(base / 9))},0,2,40,40,${Math.round(height * 0.08)},1`,
-    clean: `Style: Default,Arial,${base},&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,0,0,0,0,100,100,0,0,3,${Math.max(2, Math.round(base / 14))},0,2,40,40,${Math.round(height * 0.06)},1`,
-    karaoke: `Style: Default,Arial,${base},&H0000E5FF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${Math.max(2, Math.round(base / 10))},0,2,40,40,${Math.round(height * 0.08)},1`,
+    bold: `Style: Default,Arial,${base},${primary},${secondary},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${Math.max(2, Math.round(base / 9))},0,${alignment},40,40,${margin(0.08)},1`,
+    clean: `Style: Default,Arial,${base},${primary},${secondary},&H00000000,&H99000000,0,0,0,0,100,100,0,0,3,${Math.max(2, Math.round(base / 14))},0,${alignment},40,40,${margin(0.06)},1`,
+    karaoke: `Style: Default,Arial,${base},${primary},${secondary},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${Math.max(2, Math.round(base / 10))},0,${alignment},40,40,${margin(0.08)},1`,
   }
 
   const lines = cues.map((cue, i) => {
     const next = cues[i + 1]
     const end = Math.max(cue.end, cue.start + 0.4)
     const stop = next ? Math.min(end + 0.25, next.start) : end + 0.25
-    let text: string
-    if (style === 'karaoke') {
-      text = cue.words
+    let line: string
+    if (progressive) {
+      // \kf sweeps across the word (karaoke); \k switches colour as the word starts (highlight on other styles)
+      const tag = style === 'karaoke' ? 'kf' : 'k'
+      line = cue.words
         .map((w, k) => {
           const nextStart = cue.words[k + 1]?.start ?? w.end
-          return `{\\kf${Math.max(1, cs(nextStart - w.start))}}${w.word}`
+          return `{\\${tag}${Math.max(1, cs(nextStart - w.start))}}${upper ? w.word.toUpperCase() : w.word}`
         })
         .join(' ')
     } else {
-      text = cue.words.map((w) => w.word).join(' ')
-      if (style === 'bold') text = text.toUpperCase()
+      line = cue.words.map((w) => w.word).join(' ')
+      if (upper) line = line.toUpperCase()
     }
-    return `Dialogue: 0,${stamp(cue.start)},${stamp(Math.max(stop, cue.start + 0.4))},Default,,0,0,0,,${text}`
+    const emoji = caption.emoji ? (emojis[i] ?? '').trim() : ''
+    // Arial has no emoji glyphs; Segoe UI Symbol does (libass cannot draw colour emoji fonts).
+    if (emoji) line += ` {\\r}{\\fnSegoe UI Symbol}${emoji}`
+    return `Dialogue: 0,${stamp(cue.start)},${stamp(Math.max(stop, cue.start + 0.4))},Default,,0,0,0,,${line}`
   })
 
   return [

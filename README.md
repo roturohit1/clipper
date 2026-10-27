@@ -116,10 +116,26 @@ For a speech test video you can record yourself or use any short talking clip.
 | Method & path | Body | Result |
 |---|---|---|
 | `GET /api/config` | – | capability report + notices |
-| `POST /api/jobs/upload` | multipart: `clip_length` (10–300), `subtitle_style`, then `video` | `202` job |
-| `POST /api/jobs/url` | JSON `{url, clip_length, subtitle_style}` | `202` job |
+| `POST /api/jobs/upload` | multipart: `clip_length` (10–300), `subtitle_style`, [caption options](#caption-options), then `video` | `202` job |
+| `POST /api/jobs/url` | JSON `{url, clip_length, subtitle_style, ...caption options}` | `202` job |
 | `GET /api/jobs` / `GET /api/jobs/:id` | – | job list / job (`status`, `progress`, `stage`, `warnings`, `clips[]`) |
 | `GET /api/jobs/:id/clips/:clipId[?download=1]` | – | MP4 with HTTP Range support |
+
+### Caption options
+
+All optional; when omitted the captions look exactly as before. They are fields of both `POST /api/jobs/upload` (multipart, before the `video` field) and `POST /api/jobs/url` (JSON), and the matching controls are in the **Clip settings** panel.
+
+| Field | Values | Default |
+|---|---|---|
+| `captions` | `true` / `false` - burn captions into the clip | `true` |
+| `caption_text_color` | `white`, `yellow`, `green`, `cyan`, `pink`, a hex code such as `#FF8800`, or `default` | `default` (white) |
+| `caption_highlight_color` | same as above. Karaoke fills words with it as they are spoken (default yellow); Bold/Clean only highlight spoken words when you set one | `default` |
+| `caption_size` | `small`, `medium`, `large`, `xl` | `medium` |
+| `caption_position` | `top`, `middle`, `bottom` | `bottom` |
+| `caption_uppercase` | `auto` (Bold is uppercase, others are not), `true`, `false` | `auto` |
+| `caption_emoji` | `true` / `false` - add fitting emojis to caption lines (uses the configured chat model; falls back to a built-in keyword map if there is no key or the model call fails, with a job warning) | `false` |
+
+Emojis are drawn with the Windows "Segoe UI Symbol" font (libass cannot render colour emoji), so they appear as single-colour glyphs in the caption colour.
 
 ## Notes and limits
 

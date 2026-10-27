@@ -1,12 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { getConfig, MISSING_KEY_MESSAGE } from './config'
+import { DEFAULT_CAPTION_OPTIONS } from '../captions'
+import { emojisForLines } from './emoji'
 import { downloadFromUrl } from './ingest'
 import { extractAudio, probe } from './media'
 import { commandExists, run } from './proc'
 import { clipCountFor, selectHeuristic, selectWithAI, type ClipPlan } from './select-clips'
 import { ensureJobDir, loadJob, saveJob, type JobRecord } from './store'
-import { buildAss } from './subtitles'
+import { buildAss, captionLines } from './subtitles'
 import { resolveProvider, transcribe, type Transcript } from './transcribe'
 
 function update(job: JobRecord, progress: number, stage: string) {
@@ -140,6 +142,7 @@ async function run_(job: JobRecord) {
   if (!plans.length) throw new Error('Could not find any clip in this video.')
 
   // 5. Render
+  const caption = { ...DEFAULT_CAPTION_OPTIONS, ...job.options.captions }
   job.clips = []
   for (let i = 0; i < plans.length; i++) {
     const plan = plans[i]
@@ -152,7 +155,15 @@ async function run_(job: JobRecord) {
     const outName = `clip-${n}.mp4`
     const duration = plan.end - plan.start
     const assName = `clip-${n}.ass`
-    const ass = transcript ? buildAss(transcript.segments, plan.start, plan.end, job.options.subtitleStyle, info.width, info.height) : null
+    let emojis: string[] = []
+    if (transcript && caption.enabled && caption.emoji) {
+      update(job, from, `Adding emojis to clip ${n} captions`)
+      const lines = captionLines(transcript.segments, plan.start, plan.end, caption)
+      const result = await emojisForLines(lines)
+      emojis = result.emojis
+      if (result.note) warn(job, `Emoji captions used the keyword fallback for clip ${n} (${result.note}).`)
+    }
+    const ass = transcript && caption.enabled ? buildAss(transcript.segments, plan.start, plan.end, job.options.subtitleStyle, info.width, info.height, caption, emojis) : null
     if (ass) fs.writeFileSync(path.join(dir, assName), ass)
 
     const render = async (withCaptions: boolean) => {
