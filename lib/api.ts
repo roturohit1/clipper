@@ -1,3 +1,5 @@
+import { DEFAULT_CAPTION_OPTIONS, type CaptionOptions } from './captions'
+
 export type JobStatus = 'queued' | 'processing' | 'completed' | 'failed'
 
 export type Clip = {
@@ -35,7 +37,20 @@ export type AppConfig = {
   notices: string[]
 }
 
-type JobOptions = { clipLength: number; subtitleStyle: string }
+export type JobOptions = { clipLength: number; subtitleStyle: string; captions?: CaptionOptions }
+
+/** Caption options as the snake_case API fields (colours are #RRGGBB or omitted for the style default). */
+function captionFields(captions: CaptionOptions = DEFAULT_CAPTION_OPTIONS): Record<string, string> {
+  return {
+    captions: String(captions.enabled),
+    caption_uppercase: String(captions.uppercase),
+    caption_text_color: captions.textColor ?? 'default',
+    caption_highlight_color: captions.highlightColor ?? 'default',
+    caption_size: captions.size,
+    caption_position: captions.position,
+    caption_emoji: String(captions.emoji),
+  }
+}
 
 class ApiClient {
   // Optional. Leave NEXT_PUBLIC_API_URL empty to use the built-in Next.js API routes (same origin).
@@ -71,6 +86,7 @@ class ApiClient {
     const body = new FormData()
     body.append('clip_length', String(options.clipLength))
     body.append('subtitle_style', options.subtitleStyle)
+    for (const [key, value] of Object.entries(captionFields(options.captions))) body.append(key, value)
     body.append('video', file) // keep the file last so the server can validate options before streaming it
     return this.normalize(await this.request<Job>('/api/jobs/upload', { method: 'POST', body }))
   }
@@ -79,7 +95,7 @@ class ApiClient {
       await this.request<Job>('/api/jobs/url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, clip_length: options.clipLength, subtitle_style: options.subtitleStyle }),
+        body: JSON.stringify({ url, clip_length: options.clipLength, subtitle_style: options.subtitleStyle, ...captionFields(options.captions) }),
       }),
     )
   }

@@ -30,7 +30,7 @@ export async function POST(request: Request) {
 
   try {
     await new Promise<void>((resolve, reject) => {
-      const parser = busboy({ headers: Object.fromEntries(request.headers), limits: { files: 1, fileSize: cfg.maxUploadBytes, fields: 10 } })
+      const parser = busboy({ headers: Object.fromEntries(request.headers), limits: { files: 1, fileSize: cfg.maxUploadBytes, fields: 20 } })
       parser.on('field', (name, value) => {
         fields[name] = value
       })
@@ -62,7 +62,7 @@ export async function POST(request: Request) {
     if (writing) await writing
     if (tooLarge) throw Object.assign(new Error(`Videos must be smaller than ${cfg.maxUploadMb} MB.`), { status: 413 })
     if (badType || !savedName) throw new Error('Upload a video file (MP4, MOV, WebM, MKV…) in the "video" field.')
-    const options = parseOptions(fields.clip_length, fields.subtitle_style)
+    const options = parseOptions(fields.clip_length, fields.subtitle_style, fields)
     const job = newJob(options, { type: 'upload', file: savedName }, originalName, id)
     enqueue(job.id)
     return NextResponse.json(toPublic(job), { status: 202 })
