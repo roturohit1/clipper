@@ -1,0 +1,16 @@
+.git
+.gitignore
+.next
+node_modules
+data
+clipper
+.env
+.env.*
+!.env.example
+*.log
+tsconfig.tsbuildinfo
+scripts/*.ps1
+deploy/oracle
+.v0-trash
+.vercel
+.DS_Store
