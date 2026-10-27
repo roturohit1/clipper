@@ -14,7 +14,7 @@ function stamp(t: number) {
 const clean = (text: string) => text.replace(/[{}\\]/g, '').replace(/\s+/g, ' ').trim()
 
 /** Words that fall inside [start, end]; segments without word timing are spread evenly by character length. */
-function wordsInRange(segments: Segment[], start: number, end: number): Word[] {
+function wordsInRange(segments: Segment[], start: number, end: number, strict = false): Word[] {
   const out: Word[] = []
   for (const seg of segments) {
     if (seg.end <= start || seg.start >= end) continue
@@ -30,7 +30,11 @@ function wordsInRange(segments: Segment[], start: number, end: number): Word[] {
         return w
       })
     }
-    for (const w of words) if (w.start >= start - 0.05 && w.end <= end + 0.25) out.push({ ...w, word: clean(w.word) })
+    for (const w of words) {
+      // strict (contiguous clips): a word belongs to exactly one clip, the one containing its midpoint, so nothing is dropped or doubled at a boundary
+      const inside = strict ? (w.start + w.end) / 2 >= start && (w.start + w.end) / 2 < end : w.start >= start - 0.05 && w.end <= end + 0.25
+      if (inside) out.push({ ...w, word: clean(w.word) })
+    }
   }
   // Whisper sometimes emits punctuation-led tokens (",000", "'s", "%"): glue them to the previous word.
   const merged: Word[] = []
@@ -66,14 +70,14 @@ function buildCues(words: Word[], maxWords = 7): Cue[] {
 /** Larger text needs fewer words per caption line so it still fits on screen. Medium and below keep the original 7. */
 const maxWordsFor = (caption: CaptionOptions) => (caption.size === 'xl' ? 4 : caption.size === 'large' ? 5 : 7)
 
-function clipCues(segments: Segment[], clipStart: number, clipEnd: number, caption: CaptionOptions): Cue[] {
-  const words = wordsInRange(segments, clipStart, clipEnd).map((w) => ({ ...w, start: w.start - clipStart, end: Math.min(w.end, clipEnd) - clipStart }))
+function clipCues(segments: Segment[], clipStart: number, clipEnd: number, caption: CaptionOptions, strict = false): Cue[] {
+  const words = wordsInRange(segments, clipStart, clipEnd, strict).map((w) => ({ ...w, start: strict ? Math.max(0, w.start - clipStart) : w.start - clipStart, end: Math.min(w.end, clipEnd) - clipStart }))
   return buildCues(words, maxWordsFor(caption))
 }
 
 /** The plain text of every caption line of a clip (same order as buildAss), e.g. to ask an LLM for emojis. */
-export function captionLines(segments: Segment[], clipStart: number, clipEnd: number, caption: CaptionOptions = DEFAULT_CAPTION_OPTIONS): string[] {
-  return clipCues(segments, clipStart, clipEnd, caption).map((cue) => cue.words.map((w) => w.word).join(' '))
+export function captionLines(segments: Segment[], clipStart: number, clipEnd: number, caption: CaptionOptions = DEFAULT_CAPTION_OPTIONS, strict = false): string[] {
+  return clipCues(segments, clipStart, clipEnd, caption, strict).map((cue) => cue.words.map((w) => w.word).join(' '))
 }
 
 /** #RRGGBB -> ASS &HAABBGGRR */
@@ -92,8 +96,9 @@ export function buildAss(
   height: number,
   caption: CaptionOptions = DEFAULT_CAPTION_OPTIONS,
   emojis: string[] = [],
+  strict = false,
 ): string | null {
-  const cues = clipCues(segments, clipStart, clipEnd, caption)
+  const cues = clipCues(segments, clipStart, clipEnd, caption, strict)
   if (!cues.length) return null
 
   const base = Math.round(Math.min(width, height * 1.6) * (style === 'bold' ? 0.055 : 0.042) * SIZE_SCALE[caption.size])

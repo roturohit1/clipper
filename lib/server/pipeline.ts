@@ -6,7 +6,7 @@ import { emojisForLines } from './emoji'
 import { downloadFromUrl } from './ingest'
 import { extractAudio, probe } from './media'
 import { commandExists, run } from './proc'
-import { clipCountFor, selectHeuristic, selectWithAI, type ClipPlan } from './select-clips'
+import { clipCountFor, selectHeuristic, selectSequential, selectWithAI, type ClipPlan } from './select-clips'
 import { ensureJobDir, loadJob, saveJob, type JobRecord } from './store'
 import { buildAss, captionLines } from './subtitles'
 import { resolveProvider, transcribe, type Transcript } from './transcribe'
@@ -122,7 +122,12 @@ async function run_(job: JobRecord) {
   const count = clipCountFor(info.duration, target, cfg.maxClips)
   let plans: ClipPlan[] = []
   const wantAI = cfg.selectionProvider !== 'heuristic'
-  if (transcript && wantAI && cfg.apiKey) {
+  const sequential = job.options.clipMode === 'sequential'
+  if (sequential) {
+    // contiguous parts 0-L, L-2L, ... to the end of the video: no AI, no clip cap
+    plans = selectSequential(info.duration, target)
+    job.selection = 'sequential'
+  } else if (transcript && wantAI && cfg.apiKey) {
     try {
       plans = await selectWithAI(transcript, info.duration, target, count)
       if (plans.length) job.selection = 'ai'
@@ -158,16 +163,18 @@ async function run_(job: JobRecord) {
     let emojis: string[] = []
     if (transcript && caption.enabled && caption.emoji) {
       update(job, from, `Adding emojis to clip ${n} captions`)
-      const lines = captionLines(transcript.segments, plan.start, plan.end, caption)
+      const lines = captionLines(transcript.segments, plan.start, plan.end, caption, sequential)
       const result = await emojisForLines(lines)
       emojis = result.emojis
       if (result.note) warn(job, `Emoji captions used the keyword fallback for clip ${n} (${result.note}).`)
     }
-    const ass = transcript && caption.enabled ? buildAss(transcript.segments, plan.start, plan.end, job.options.subtitleStyle, info.width, info.height, caption, emojis) : null
+    const ass = transcript && caption.enabled ? buildAss(transcript.segments, plan.start, plan.end, job.options.subtitleStyle, info.width, info.height, caption, emojis, sequential) : null
     if (ass) fs.writeFileSync(path.join(dir, assName), ass)
 
     const render = async (withCaptions: boolean) => {
-      const args = ['-y', '-v', 'error', '-nostats', '-progress', 'pipe:1', '-ss', plan.start.toFixed(2), '-i', source, '-t', duration.toFixed(2)]
+      const args = ['-y', '-v', 'error', '-nostats', '-progress', 'pipe:1', '-ss', plan.start.toFixed(2), '-i', source]
+      // the last contiguous part runs to the end of the file, so no rounding of -t can drop its final frames
+      if (!(sequential && i === plans.length - 1)) args.push('-t', duration.toFixed(2))
       if (withCaptions) args.push('-vf', `ass=${assName}`) // relative name + cwd avoids Windows drive-letter escaping problems
       args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', path.join('clips', outName))
       return run(cfg.ffmpegPath, args, {
@@ -193,7 +200,8 @@ async function run_(job: JobRecord) {
       title: plan.title,
       reason: plan.reason,
       durationSeconds: Math.round(duration),
-      sourceStartSeconds: Math.round(plan.start),
+      sourceStartSeconds: Math.round(plan.start * 100) / 100,
+      sourceEndSeconds: Math.round(plan.end * 100) / 100,
       previewUrl: `/api/jobs/${job.id}/clips/clip-${n}`,
       downloadUrl: `/api/jobs/${job.id}/clips/clip-${n}?download=1`,
       captioned,

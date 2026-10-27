@@ -121,12 +121,13 @@ For a speech test video you can record yourself or use any short talking clip.
 | `GET /api/jobs` / `GET /api/jobs/:id` | – | job list / job (`status`, `progress`, `stage`, `warnings`, `clips[]`) |
 | `GET /api/jobs/:id/clips/:clipId[?download=1]` | – | MP4 with HTTP Range support |
 
-### Caption options
+### Clip mode and caption options
 
 All optional; when omitted the captions look exactly as before. They are fields of both `POST /api/jobs/upload` (multipart, before the `video` field) and `POST /api/jobs/url` (JSON), and the matching controls are in the **Clip settings** panel.
 
 | Field | Values | Default |
 |---|---|---|
+| `clip_mode` | `sequential` - contiguous parts of `clip_length` seconds covering the whole video (0-45 s, 45-90 s, ... last part = remainder, no AI selection, no clip cap up to 300); `highlights` - AI/energy picks the best moments (up to `MAX_CLIPS`, parts of the video are skipped). The web UI defaults to `sequential`. | `highlights` |
 | `captions` | `true` / `false` - burn captions into the clip | `true` |
 | `caption_text_color` | `white`, `yellow`, `green`, `cyan`, `pink`, a hex code such as `#FF8800`, or `default` | `default` (white) |
 | `caption_highlight_color` | same as above. Karaoke fills words with it as they are spoken (default yellow); Bold/Clean only highlight spoken words when you set one | `default` |

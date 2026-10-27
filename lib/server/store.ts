@@ -2,12 +2,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Clip, Job } from '@/lib/api'
 import type { CaptionOptions } from '@/lib/captions'
+import type { ClipMode } from '@/lib/clip-mode'
 import { getConfig } from './config'
 
 /** Server-side job record (superset of the public Job shape). */
 export type JobRecord = Omit<Job, 'clips'> & {
   clips: Array<Clip & { file: string }>
-  options: { clipLength: number; subtitleStyle: 'bold' | 'clean' | 'karaoke'; /** absent on jobs created before caption options existed */ captions?: CaptionOptions }
+  options: { clipLength: number; subtitleStyle: 'bold' | 'clean' | 'karaoke'; /** absent on older jobs, which behave like 'highlights' */ clipMode?: ClipMode; /** absent on jobs created before caption options existed */ captions?: CaptionOptions }
   source: { type: 'upload' | 'url'; url?: string; file?: string }
   updatedAt: string
 }

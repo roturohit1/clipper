@@ -1,4 +1,5 @@
 import { DEFAULT_CAPTION_OPTIONS, type CaptionOptions } from './captions'
+import type { ClipMode } from './clip-mode'
 
 export type JobStatus = 'queued' | 'processing' | 'completed' | 'failed'
 
@@ -7,6 +8,8 @@ export type Clip = {
   title: string
   durationSeconds: number
   sourceStartSeconds: number
+  /** End of this clip in the source video (seconds). */
+  sourceEndSeconds?: number
   previewUrl: string
   downloadUrl: string
   reason?: string
@@ -23,7 +26,7 @@ export type Job = {
   sourceName?: string
   createdAt?: string
   transcription?: 'openai' | 'local' | 'none'
-  selection?: 'ai' | 'heuristic'
+  selection?: 'ai' | 'heuristic' | 'sequential'
   clips?: Clip[]
 }
 
@@ -37,7 +40,7 @@ export type AppConfig = {
   notices: string[]
 }
 
-export type JobOptions = { clipLength: number; subtitleStyle: string; captions?: CaptionOptions }
+export type JobOptions = { clipLength: number; subtitleStyle: string; clipMode?: ClipMode; captions?: CaptionOptions }
 
 /** Caption options as the snake_case API fields (colours are #RRGGBB or omitted for the style default). */
 function captionFields(captions: CaptionOptions = DEFAULT_CAPTION_OPTIONS): Record<string, string> {
@@ -86,6 +89,7 @@ class ApiClient {
     const body = new FormData()
     body.append('clip_length', String(options.clipLength))
     body.append('subtitle_style', options.subtitleStyle)
+    if (options.clipMode) body.append('clip_mode', options.clipMode)
     for (const [key, value] of Object.entries(captionFields(options.captions))) body.append(key, value)
     body.append('video', file) // keep the file last so the server can validate options before streaming it
     return this.normalize(await this.request<Job>('/api/jobs/upload', { method: 'POST', body }))
@@ -95,7 +99,7 @@ class ApiClient {
       await this.request<Job>('/api/jobs/url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, clip_length: options.clipLength, subtitle_style: options.subtitleStyle, ...captionFields(options.captions) }),
+        body: JSON.stringify({ url, clip_length: options.clipLength, subtitle_style: options.subtitleStyle, ...(options.clipMode ? { clip_mode: options.clipMode } : {}), ...captionFields(options.captions) }),
       }),
     )
   }

@@ -1,3 +1,4 @@
+import { MAX_SEQUENTIAL_CLIPS } from '../clip-mode'
 import { getConfig } from './config'
 import { loudnessPerSecond } from './media'
 import type { Segment, Transcript } from './transcribe'
@@ -39,6 +40,25 @@ function dedupe(plans: ClipPlan[], limit: number): ClipPlan[] {
     if (out.length >= limit) break
   }
   return out.sort((a, b) => a.start - b.start)
+}
+
+/**
+ * Contiguous fixed-length parts: 0-L, L-2L, ... up to the end of the video, with no gaps or overlaps.
+ * The last part is whatever remains (a tail shorter than MIN_TAIL seconds is folded into the previous part
+ * instead of becoming an unwatchable sliver).
+ */
+const MIN_TAIL = 2
+export function selectSequential(duration: number, target: number): ClipPlan[] {
+  const plans: ClipPlan[] = []
+  let start = 0
+  while (start < duration - 0.05) {
+    let end = Math.min(duration, start + target)
+    if (duration - end < MIN_TAIL) end = duration
+    plans.push({ start, end, title: `Part ${plans.length + 1} (${fmt(start)}-${fmt(end)})` })
+    start = end
+  }
+  if (plans.length > MAX_SEQUENTIAL_CLIPS) throw new Error(`This video would be cut into ${plans.length} parts (limit ${MAX_SEQUENTIAL_CLIPS}). Choose a longer clip length.`)
+  return plans
 }
 
 export function clipCountFor(duration: number, target: number, max: number) {
