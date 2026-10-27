@@ -1,0 +1,18 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background); --color-foreground: var(--foreground); --color-card: var(--card); --color-card-foreground: var(--card-foreground); --color-popover: var(--popover); --color-popover-foreground: var(--popover-foreground); --color-primary: var(--primary); --color-primary-foreground: var(--primary-foreground); --color-secondary: var(--secondary); --color-secondary-foreground: var(--secondary-foreground); --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground); --color-accent: var(--accent); --color-accent-foreground: var(--accent-foreground); --color-destructive: var(--destructive); --color-border: var(--border); --color-input: var(--input); --color-ring: var(--ring); --color-sidebar: var(--sidebar); --color-sidebar-foreground: var(--sidebar-foreground);
+  --radius-sm: calc(var(--radius) * .6); --radius-md: calc(var(--radius) * .8); --radius-lg: var(--radius); --radius-xl: calc(var(--radius) * 1.35); --radius-2xl: calc(var(--radius) * 1.7);
+}
+
+:root { color-scheme: dark; --background: oklch(.12 .018 258); --foreground: oklch(.96 .015 245); --card: oklch(.16 .02 258); --card-foreground: oklch(.96 .015 245); --popover: oklch(.16 .02 258); --popover-foreground: oklch(.96 .015 245); --primary: oklch(.78 .16 188); --primary-foreground: oklch(.12 .03 245); --secondary: oklch(.22 .03 258); --secondary-foreground: oklch(.92 .015 245); --muted: oklch(.19 .025 258); --muted-foreground: oklch(.68 .03 245); --accent: oklch(.24 .04 258); --accent-foreground: oklch(.96 .015 245); --destructive: oklch(.68 .18 25); --border: oklch(1 0 0 / 10%); --input: oklch(1 0 0 / 13%); --ring: oklch(.78 .16 188); --sidebar: oklch(.105 .018 258); --sidebar-foreground: oklch(.96 .015 245); --radius: .75rem; }
+
+* { border-color: var(--border); }
+html { background: var(--background); }
+body { margin: 0; min-width: 320px; background: radial-gradient(circle at 78% -10%, oklch(.25 .06 220 / .35), transparent 34rem), var(--background); font-family: Arial, Helvetica, sans-serif; }
+button, input, select { font: inherit; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
