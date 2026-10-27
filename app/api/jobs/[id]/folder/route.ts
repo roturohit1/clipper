@@ -15,16 +15,19 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
   const dir = path.join(jobDir(id), 'clips')
   fs.mkdirSync(dir, { recursive: true })
   const folder = job.folder ? `projects/${job.folder}/clips` : `jobs/${job.id}/clips`
-  try {
-    if (process.platform === 'win32') {
-      spawn('explorer.exe', [dir], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
-    } else if (process.platform === 'darwin') {
-      spawn('open', [dir], { detached: true, stdio: 'ignore' }).unref()
-    } else {
-      spawn('xdg-open', [dir], { detached: true, stdio: 'ignore' }).unref()
+  // On a headless Linux server (no desktop) there is nothing to open; skip quietly instead of crashing on a missing xdg-open.
+  const hasDesktop = process.platform === 'win32' || process.platform === 'darwin' || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)
+  let opened = false
+  if (hasDesktop) {
+    try {
+      const command = process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open'
+      const child = spawn(command, [dir], { detached: true, stdio: 'ignore', windowsHide: true })
+      child.on('error', () => {}) // a missing launcher emits 'error' asynchronously and would otherwise crash the server
+      child.unref()
+      opened = true
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : 'Could not open the project folder.')
     }
-  } catch (error) {
-    return jsonError(error instanceof Error ? error.message : 'Could not open the project folder.')
   }
-  return Response.json({ ok: true, folder }, { headers: { 'Cache-Control': 'no-store' } })
+  return Response.json({ ok: true, opened, folder }, { headers: { 'Cache-Control': 'no-store' } })
 }

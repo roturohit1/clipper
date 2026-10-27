@@ -11,6 +11,7 @@ function stamp(t: number) {
   const s = Math.floor((total % 6000) / 100)
   return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(total % 100).padStart(2, '0')}`
 }
+const EMOJI_FONT = process.platform === 'win32' ? 'Segoe UI Symbol' : 'Symbola'
 const clean = (text: string) => text.replace(/[{}\\]/g, '').replace(/\s+/g, ' ').trim()
 
 /** Words that fall inside [start, end]; segments without word timing are spread evenly by character length. */
@@ -138,8 +139,8 @@ export function buildAss(
       if (upper) line = line.toUpperCase()
     }
     const emoji = caption.emoji ? (emojis[i] ?? '').trim() : ''
-    // Arial has no emoji glyphs; Segoe UI Symbol does (libass cannot draw colour emoji fonts).
-    if (emoji) line += ` {\\r}{\\fnSegoe UI Symbol}${emoji}`
+    // Arial has no emoji glyphs; Segoe UI Symbol (Windows) or Symbola (Linux, package fonts-symbola) does. libass cannot draw colour emoji fonts.
+    if (emoji) line += ` {\\r}{\\fn${EMOJI_FONT}}${emoji}`
     return `Dialogue: 0,${stamp(cue.start)},${stamp(Math.max(stop, cue.start + 0.4))},Default,,0,0,0,,${line}`
   })
 
