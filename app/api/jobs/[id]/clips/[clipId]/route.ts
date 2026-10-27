@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { jsonError } from '@/lib/server/http'
-import { CLIP_ID_RE, jobDir, loadJob } from '@/lib/server/store'
+import { CLIP_ID_RE, deleteClip, jobDir, loadJob, toPublic } from '@/lib/server/store'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -49,4 +49,18 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string;
   const stream = fs.createReadStream(file, { start, end })
   request.signal.addEventListener('abort', () => stream.destroy())
   return new Response(Readable.toWeb(stream) as ReadableStream, { status, headers })
+}
+
+export async function DELETE(_request: Request, ctx: { params: Promise<{ id: string; clipId: string }> }) {
+  const { id, clipId } = await ctx.params
+  if (!CLIP_ID_RE.test(clipId)) return jsonError('Video not found.', 404)
+  const job = loadJob(id)
+  if (!job) return jsonError('Project not found.', 404)
+  if (job.status === 'queued' || job.status === 'processing') return jsonError('This project is still processing. Wait for it to finish, or delete the whole project.', 409)
+  try {
+    if (!deleteClip(job, clipId)) return jsonError('Video not found.', 404)
+  } catch (error) {
+    return jsonError(error instanceof Error ? `Could not delete the video: ${error.message}` : 'Could not delete the video.', 500)
+  }
+  return Response.json(toPublic(job), { headers: { 'Cache-Control': 'no-store' } })
 }

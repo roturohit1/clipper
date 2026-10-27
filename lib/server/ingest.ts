@@ -5,7 +5,7 @@ import path from 'node:path'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { getConfig } from './config'
-import { commandExists, run } from './proc'
+import { commandExists, currentSignal, run } from './proc'
 
 const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|flv|ts|mpg|mpeg|3gp|ogv)$/i
 
@@ -47,7 +47,7 @@ export async function downloadFromUrl(rawUrl: string, dir: string, onProgress: (
   // Direct file download, following redirects manually so every hop is checked.
   let response: Response | null = null
   for (let hop = 0; hop < 5; hop++) {
-    response = await fetch(url, { redirect: 'manual', headers: { 'User-Agent': 'Mozilla/5.0 (Cutline)' } })
+    response = await fetch(url, { redirect: 'manual', headers: { 'User-Agent': 'Mozilla/5.0 (Cutline)' }, signal: currentSignal() })
     const location = response.headers.get('location')
     if (response.status >= 300 && response.status < 400 && location) {
       url = await assertPublicUrl(new URL(location, url).toString())
@@ -77,7 +77,7 @@ export async function downloadFromUrl(rawUrl: string, dir: string, onProgress: (
       cb(null, chunk)
     },
   })
-  await pipeline(Readable.fromWeb(response.body as never), counter, fs.createWriteStream(dest))
+  await pipeline(Readable.fromWeb(response.body as never), counter, fs.createWriteStream(dest), { signal: currentSignal() })
   return dest
 }
 

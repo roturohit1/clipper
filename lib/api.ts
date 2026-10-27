@@ -114,6 +114,15 @@ class ApiClient {
   async getJob(id: string) {
     return this.normalize(await this.request<Job>(`/api/jobs/${encodeURIComponent(id)}`))
   }
+  async deleteJob(id: string) {
+    await this.request<{ ok: boolean }>(`/api/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+  async deleteClip(id: string, clipId: string) {
+    return this.normalize(await this.request<Job>(`/api/jobs/${encodeURIComponent(id)}/clips/${encodeURIComponent(clipId)}`, { method: 'DELETE' }))
+  }
+  async deleteAllJobs() {
+    return this.request<{ ok: boolean; deleted: number }>('/api/jobs', { method: 'DELETE' })
+  }
   async listJobs() {
     const jobs = await this.request<Job[]>('/api/jobs')
     return jobs.map((job) => this.normalize(job))

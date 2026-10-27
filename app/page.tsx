@@ -10,6 +10,15 @@ const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|flv|ts|mpg|mpeg|3gp|ogv|wmv)$/i
 const LAST_JOB_KEY = 'cutline:lastJobId'
 const HEX_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i
 
+/** Trash icon (inline SVG, no icon library needed). */
+function Trash2({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M3 6h18" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M10 11v6" /><path d="M14 11v6" />
+    </svg>
+  )
+}
+
 /** Colour preset picker: '' = style default, a preset name, or a custom #hex value. */
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   const custom = value.startsWith('#')
@@ -57,6 +66,7 @@ export default function Page() {
   const [openingFolder, setOpeningFolder] = useState(false)
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [projects, setProjects] = useState<Job[]>([])
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   const active = job?.status === 'queued' || job?.status === 'processing'
   const jobId = job?.id
@@ -81,7 +91,7 @@ export default function Page() {
   useEffect(() => {
     if (!jobId || !active) return
     const timer = window.setInterval(() => {
-      apiClient.getJob(jobId).then(setJob).catch((caught) => {
+      apiClient.getJob(jobId).then((updated) => setJob((current) => (current?.id === updated.id ? updated : current))).catch((caught) => {
         setError(caught instanceof Error ? caught.message : 'Lost connection to the processing API.')
         window.clearInterval(timer)
       })
@@ -126,6 +136,63 @@ export default function Page() {
       setOpeningFolder(false)
     }
   }
+  const forgetOpenProject = () => {
+    setJob(null)
+    window.localStorage.removeItem(LAST_JOB_KEY)
+    setCreating(true)
+  }
+
+  const deleteProject = async (item: Job) => {
+    const running = item.status === 'queued' || item.status === 'processing'
+    const message = `Delete project "${projectLabel(item)}"?\n\nThis permanently removes its folder, the uploaded video and all ${item.clips?.length ?? 0} generated videos.${running ? '\n\nIt is still processing; processing will be stopped.' : ''}\n\nThis cannot be undone.`
+    if (!window.confirm(message)) return
+    setDeleting(item.id)
+    setError('')
+    try {
+      await apiClient.deleteJob(item.id)
+      setProjects((current) => current.filter((project) => project.id !== item.id))
+      if (job?.id === item.id) forgetOpenProject()
+      await loadProjects()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to delete this project.')
+    } finally {
+      setDeleting(null)
+    }
+  }
+
+  const deleteAllProjects = async () => {
+    if (!projects.length) return
+    if (!window.confirm(`Delete ALL ${projects.length} projects?\n\nThis permanently removes every project folder, uploaded video and generated video.\n\nThis cannot be undone.`)) return
+    setDeleting('all')
+    setError('')
+    try {
+      await apiClient.deleteAllJobs()
+      setProjects([])
+      forgetOpenProject()
+      await loadProjects()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to delete the projects.')
+    } finally {
+      setDeleting(null)
+    }
+  }
+
+  const deleteClip = async (clipId: string, label: string) => {
+    if (!job) return
+    if (!window.confirm(`Delete ${label}?\n\nThe video file is permanently removed from this project. This cannot be undone.`)) return
+    setDeleting(clipId)
+    setError('')
+    try {
+      const updated = await apiClient.deleteClip(job.id, clipId)
+      setJob(updated)
+      await loadProjects()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to delete this video.')
+    } finally {
+      setDeleting(null)
+    }
+  }
+
   const normalizedUrl = (() => {
     const value = url.trim()
     if (!value) return ''
@@ -211,16 +278,20 @@ export default function Page() {
               const count = item.clips?.length ?? 0
               const when = item.createdAt ? new Date(item.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : item.status
               return (
-                <button key={item.id} onClick={() => openProject(item)} className={`flex items-center gap-3 rounded-xl px-2.5 py-2 text-left ${selected ? 'bg-primary/10 text-primary' : 'text-foreground transition hover:bg-muted/60'}`}>
+                <div key={item.id} className="group relative">
+                <button onClick={() => openProject(item)} className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2 pr-9 text-left ${selected ? 'bg-primary/10 text-primary' : 'text-foreground transition hover:bg-muted/60'}`}>
                   <span className={`grid size-8 shrink-0 place-items-center rounded-lg text-[10px] font-semibold ${selected ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{item.projectNumber ? String(item.projectNumber).padStart(2, '0') : '•'}</span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{projectLabel(item)}</span>
                     <span className={`mt-0.5 block truncate text-[11px] ${selected ? 'text-primary/80' : 'text-muted-foreground'}`}>{count} {count === 1 ? 'video' : 'videos'} · {when}</span>
                   </span>
                 </button>
-              )
+                <button onClick={() => void deleteProject(item)} disabled={deleting !== null} title="Delete project" aria-label={`Delete project ${projectLabel(item)}`} className="absolute right-1.5 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-lg text-muted-foreground opacity-60 transition hover:bg-destructive/10 hover:text-destructive hover:opacity-100 focus:opacity-100 disabled:opacity-30 group-hover:opacity-100"><Trash2 className="size-4" /></button>
+              </div>
+            )
             }) : <p className="px-2 py-3 text-xs leading-5 text-muted-foreground">No projects yet. Each video you create gets its own folder.</p>}
           </nav>
+          {projects.length ? <button onClick={() => void deleteAllProjects()} disabled={deleting !== null} className="mt-2 flex items-center gap-2 rounded-xl px-3 py-2 text-xs text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"><Trash2 className="size-3.5" />{deleting === 'all' ? 'Deleting...' : 'Delete all projects'}</button> : null}
         </aside>
 
         <section className="min-w-0 flex-1">
@@ -274,6 +345,7 @@ export default function Page() {
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <button onClick={() => void openFolder()} disabled={openingFolder} className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-semibold transition hover:border-primary/50 disabled:opacity-60">{openingFolder ? 'Opening…' : 'Open folder'}</button>
+                  <button onClick={() => void deleteProject(job)} disabled={deleting !== null} className="flex items-center gap-1.5 rounded-lg border border-destructive/40 bg-background px-3 py-1.5 text-xs font-semibold text-destructive transition hover:bg-destructive/10 disabled:opacity-60"><Trash2 className="size-3.5" />{deleting === job.id ? 'Deleting...' : 'Delete project'}</button>
                   <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">{job.status}</span>
                 </div>
               </div>
@@ -283,7 +355,7 @@ export default function Page() {
                 {job.status === 'failed' && job.error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">{job.error}</p>}
                 {job.warnings?.length ? <div className="mt-4 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs leading-5 text-muted-foreground">{job.warnings.map((warning) => <p key={warning}>• {warning}</p>)}</div> : null}
                 {error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">{error}</p>}
-                {orderedClips.length ? <div className="mt-6 grid gap-4 sm:grid-cols-2"><p className="col-span-full text-sm font-medium">Videos in this project</p>{orderedClips.map((clip, index) => <article key={clip.id} className="overflow-hidden rounded-xl border border-border bg-background"><video controls preload="metadata" src={clip.previewUrl} className="aspect-video w-full bg-black" /><div className="flex items-center justify-between gap-3 p-3"><div><p className="text-xs font-medium">Clip {index + 1}: {clip.title}</p><p className="mt-1 text-[11px] text-muted-foreground">{clip.durationSeconds}s · {clip.sourceEndSeconds !== undefined ? `${clip.sourceStartSeconds}s?${clip.sourceEndSeconds}s` : `${clip.sourceStartSeconds}s`} source{clip.captioned ? ' · captions' : ''}</p>{clip.reason && <p className="mt-1 text-[11px] leading-4 text-muted-foreground/80">{clip.reason}</p>}</div><a href={clip.downloadUrl} download className="rounded-lg bg-muted px-3 py-2 text-xs font-semibold hover:bg-muted/70">Download</a></div></article>)}</div> : <p className="mt-5 text-sm text-muted-foreground">{job.status === 'failed' ? 'No videos were produced.' : 'Videos will appear in this project as soon as they are rendered.'}</p>}
+                {orderedClips.length ? <div className="mt-6 grid gap-4 sm:grid-cols-2"><p className="col-span-full text-sm font-medium">Videos in this project</p>{orderedClips.map((clip, index) => <article key={clip.id} className="overflow-hidden rounded-xl border border-border bg-background"><video controls preload="metadata" src={clip.previewUrl} className="aspect-video w-full bg-black" /><div className="flex items-center justify-between gap-3 p-3"><div><p className="text-xs font-medium">Clip {index + 1}: {clip.title}</p><p className="mt-1 text-[11px] text-muted-foreground">{clip.durationSeconds}s · {clip.sourceEndSeconds !== undefined ? `${clip.sourceStartSeconds}s?${clip.sourceEndSeconds}s` : `${clip.sourceStartSeconds}s`} source{clip.captioned ? ' · captions' : ''}</p>{clip.reason && <p className="mt-1 text-[11px] leading-4 text-muted-foreground/80">{clip.reason}</p>}</div><div className="flex shrink-0 items-center gap-2"><a href={clip.downloadUrl} download className="rounded-lg bg-muted px-3 py-2 text-xs font-semibold hover:bg-muted/70">Download</a><button onClick={() => void deleteClip(clip.id, `Clip ${index + 1}`)} disabled={deleting !== null} aria-label={`Delete clip ${index + 1}`} className="flex items-center gap-1 rounded-lg border border-destructive/40 px-3 py-2 text-xs font-semibold text-destructive transition hover:bg-destructive/10 disabled:opacity-50"><Trash2 className="size-3.5" />{deleting === clip.id ? 'Deleting...' : 'Delete'}</button></div></div></article>)}</div> : <p className="mt-5 text-sm text-muted-foreground">{job.status === 'failed' ? 'No videos were produced.' : 'Videos will appear in this project as soon as they are rendered.'}</p>}
               </div>
             </section> : <div className="rounded-2xl border border-dashed border-border px-5 py-16 text-center"><p className="text-sm font-medium">No project open</p><p className="mt-1 text-xs text-muted-foreground">Start a new project, or pick one from the list. Each video keeps its clips in its own folder.</p><button onClick={() => setCreating(true)} className="mt-5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">New project</button></div>}
           </div>

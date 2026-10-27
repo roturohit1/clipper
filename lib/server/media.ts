@@ -1,5 +1,5 @@
 import { getConfig } from './config'
-import { run } from './proc'
+import { currentSignal, run } from './proc'
 
 export type MediaInfo = { duration: number; width: number; height: number; hasAudio: boolean; hasVideo: boolean }
 
@@ -38,7 +38,7 @@ export async function loudnessPerSecond(input: string): Promise<number[]> {
   const { ffmpegPath } = getConfig()
   const { spawn } = await import('node:child_process')
   return new Promise((resolve, reject) => {
-    const child = spawn(ffmpegPath, ['-v', 'error', '-i', input, '-vn', '-ac', '1', '-ar', '8000', '-f', 's16le', '-'], { windowsHide: true })
+    const child = spawn(ffmpegPath, ['-v', 'error', '-i', input, '-vn', '-ac', '1', '-ar', '8000', '-f', 's16le', '-'], { windowsHide: true, signal: currentSignal() })
     const out: number[] = []
     let sum = 0
     let count = 0

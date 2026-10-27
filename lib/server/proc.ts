@@ -1,4 +1,11 @@
 import { spawn } from 'node:child_process'
+import { AsyncLocalStorage } from 'node:async_hooks'
+
+// Kept on globalThis so every route bundle shares one store. processJob runs inside jobContext, so each child
+// process it starts can be cancelled when its project is deleted.
+const g = globalThis as unknown as { __avcpJobCtx?: AsyncLocalStorage<{ signal: AbortSignal }> }
+export const jobContext = (g.__avcpJobCtx ??= new AsyncLocalStorage<{ signal: AbortSignal }>())
+export const currentSignal = (): AbortSignal | undefined => jobContext.getStore()?.signal
 
 export type RunResult = { code: number; stdout: string; stderr: string }
 
@@ -8,7 +15,7 @@ export function run(
   opts: { cwd?: string; onStderrLine?: (line: string) => void; onStdoutLine?: (line: string) => void; signal?: AbortSignal; maxBuffer?: number } = {},
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, windowsHide: true, signal: opts.signal })
+    const child = spawn(cmd, args, { cwd: opts.cwd, windowsHide: true, signal: opts.signal ?? currentSignal() })
     let stdout = ''
     let stderr = ''
     let errBuf = ''

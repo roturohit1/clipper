@@ -19,8 +19,12 @@ const g = globalThis as unknown as {
   __avcpFolders?: Map<string, string>
   __avcpIndexed?: boolean
   __avcpDbSynced?: boolean
+  __avcpDeleted?: Set<string>
 }
 const cache = (g.__avcpJobs ??= new Map<string, JobRecord>())
+/** Ids of deleted projects: a still-running job must never write its record or folder back. */
+const deleted = (g.__avcpDeleted ??= new Set<string>())
+export const isDeleted = (id: string) => deleted.has(id)
 /** Job id → folder name under data/projects (for example "001-my-video"). */
 const folderById = (g.__avcpFolders ??= new Map<string, string>())
 
@@ -151,7 +155,55 @@ export function removeJobFiles(id: string) {
   }
 }
 
+/** True when `target` is a strict descendant of `parent` (after resolving both). */
+function isInside(parent: string, target: string) {
+  const rel = path.relative(path.resolve(parent), path.resolve(target))
+  return Boolean(rel) && !rel.startsWith('..') && !path.isAbsolute(rel)
+}
+
+function removePath(target: string) {
+  // Retries cover Windows briefly holding a file open right after its process was killed.
+  fs.rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 })
+}
+
+/**
+ * Delete a project: its record and its whole folder (source upload, clips, captions, transcript, job.json).
+ * The folder is derived from the id (never from client input) and must be a direct child of data/projects or data/jobs.
+ */
+export function deleteProject(id: string) {
+  if (!ID_RE.test(id)) throw new Error('Invalid project id.')
+  const dir = path.resolve(jobDir(id))
+  const roots = [projectsRoot(), jobsRoot()].map((root) => path.resolve(root))
+  if (!roots.some((root) => path.dirname(dir) === root && isInside(root, dir))) throw new Error('Refusing to delete a folder outside the data folder.')
+  deleted.add(id)
+  removePath(dir)
+  folderById.delete(id)
+  cache.delete(id)
+  try {
+    deleteJob(id)
+  } catch {
+    // Nothing to remove if the row never existed.
+  }
+}
+
+/** Delete one clip's video (and its caption file) and drop it from the project. Other clips keep their ids. */
+export function deleteClip(job: JobRecord, clipId: string): boolean {
+  if (!CLIP_ID_RE.test(clipId)) throw new Error('Invalid clip id.')
+  const index = job.clips.findIndex((clip) => clip.id === clipId)
+  if (index === -1) return false
+  const dir = path.resolve(jobDir(job.id))
+  const targets = [path.resolve(dir, job.clips[index].file), path.resolve(dir, `${clipId}.ass`), path.resolve(dir, 'clips', `${clipId}.mp4`)]
+  for (const target of targets) {
+    if (!isInside(dir, target)) throw new Error('Refusing to delete a file outside the project folder.')
+    removePath(target)
+  }
+  job.clips.splice(index, 1)
+  saveJob(job)
+  return true
+}
+
 export function saveJob(job: JobRecord) {
+  if (deleted.has(job.id)) return
   job.updatedAt = new Date().toISOString()
   const folder = safeFolder(job.folder)
   if (folder) folderById.set(job.id, folder)
@@ -230,7 +282,7 @@ function finishLoad(job: JobRecord) {
 }
 
 export function loadJob(id: string): JobRecord | null {
-  if (!ID_RE.test(id)) return null
+  if (!ID_RE.test(id) || deleted.has(id)) return null
   const cached = cache.get(id)
   if (cached) return cached
   const stored = readJob(id)
@@ -247,9 +299,9 @@ export function loadJob(id: string): JobRecord | null {
   }
 }
 
-export function listJobs(): JobRecord[] {
+export function listJobs(limit = 200): JobRecord[] {
   syncFromDisk()
-  const jobs = readJobs(200)
+  const jobs = readJobs(limit).filter((job) => !deleted.has(job.id))
   for (const job of jobs) {
     const folder = safeFolder(job.folder)
     if (folder) folderById.set(job.id, folder)

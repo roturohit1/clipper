@@ -5,9 +5,9 @@ import { DEFAULT_CAPTION_OPTIONS } from '../captions'
 import { emojisForLines } from './emoji'
 import { downloadFromUrl } from './ingest'
 import { extractAudio, probe } from './media'
-import { commandExists, run } from './proc'
+import { commandExists, jobContext, run } from './proc'
 import { clipCountFor, selectHeuristic, selectSequential, selectWithAI, type ClipPlan } from './select-clips'
-import { ensureJobDir, loadJob, saveJob, type JobRecord } from './store'
+import { ensureJobDir, isDeleted, loadJob, saveJob, type JobRecord } from './store'
 import { buildAss, captionLines } from './subtitles'
 import { resolveProvider, transcribe, type Transcript } from './transcribe'
 
@@ -24,6 +24,23 @@ const warn = (job: JobRecord, message: string) => {
 // ---- simple in-process queue (state kept on globalThis so all route bundles share it) ----
 const g = globalThis as unknown as { __avcpQueue?: { pending: string[]; running: number } }
 const queue = (g.__avcpQueue ??= { pending: [], running: 0 })
+const gr = globalThis as unknown as { __avcpRuns?: Map<string, { controller: AbortController; done: Promise<void> }> }
+const runs = (gr.__avcpRuns ??= new Map<string, { controller: AbortController; done: Promise<void> }>())
+
+/** Stop a queued or running job: drop it from the queue and kill its ffmpeg / yt-dlp / download, then wait for it to let go of its files. */
+export async function cancelJob(id: string) {
+  const queued = queue.pending.indexOf(id)
+  if (queued !== -1) queue.pending.splice(queued, 1)
+  const active = runs.get(id)
+  if (!active) return
+  active.controller.abort()
+  await Promise.race([active.done, new Promise((resolve) => setTimeout(resolve, 10_000))])
+}
+
+/** Throws once the project has been deleted so a running job stops at its next step. */
+function assertActive(job: JobRecord) {
+  if (isDeleted(job.id)) throw new Error('This project was deleted.')
+}
 
 export function enqueue(jobId: string) {
   queue.pending.push(jobId)
@@ -35,12 +52,16 @@ function pump() {
   while (queue.running < limit && queue.pending.length) {
     const id = queue.pending.shift()!
     queue.running++
-    void processJob(id)
+    const controller = new AbortController()
+    const done = jobContext
+      .run({ signal: controller.signal }, () => processJob(id))
       .catch((error) => console.error('[pipeline] unexpected error', error))
       .finally(() => {
+        runs.delete(id)
         queue.running--
         pump()
       })
+    runs.set(id, { controller, done })
   }
 }
 
@@ -58,6 +79,7 @@ async function processJob(id: string) {
     job.stage = 'Done'
     saveJob(job)
   } catch (error) {
+    if (isDeleted(id)) return // cancelled because the project was deleted
     console.error(`[pipeline] job ${id} failed:`, error)
     job.status = 'failed'
     job.error = error instanceof Error ? error.message : 'Processing failed.'
@@ -84,11 +106,13 @@ async function run_(job: JobRecord) {
     job.source.file = path.basename(source)
     job.sourceName = job.sourceName || path.basename(source)
   }
+  assertActive(job)
   if (!source || !fs.existsSync(source)) throw new Error('The source video is missing.')
 
   // 2. Probe
   update(job, 15, 'Analyzing video')
   const info = await probe(source)
+  assertActive(job)
 
   // 3. Audio + transcription
   let transcript: Transcript | null = null
@@ -117,6 +141,7 @@ async function run_(job: JobRecord) {
   }
 
   // 4. Choose clips
+  assertActive(job)
   update(job, 52, 'Choosing the best moments')
   const target = job.options.clipLength
   const count = clipCountFor(info.duration, target, cfg.maxClips)
@@ -155,6 +180,7 @@ async function run_(job: JobRecord) {
     const from = 55 + (i / plans.length) * 44
     const span = 44 / plans.length
     const stage = `Rendering clip ${n} of ${plans.length}`
+    assertActive(job)
     update(job, from, stage)
 
     const outName = `clip-${n}.mp4`
