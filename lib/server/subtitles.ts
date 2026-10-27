@@ -112,7 +112,9 @@ export function buildAss(
   const secondary = ass(text)
   // 2 = bottom centre, 5 = middle centre, 8 = top centre
   const alignment = caption.position === 'top' ? 8 : caption.position === 'middle' ? 5 : 2
-  const margin = (ratio: number) => (caption.position === 'middle' ? 0 : Math.round(height * ratio))
+  // tall frames (9:16) get a bigger bottom/top margin so captions clear the Reels / Shorts interface
+  const tall = height / width > 1.4 ? 1.5 : 1
+  const margin = (ratio: number) => (caption.position === 'middle' ? 0 : Math.round(height * ratio * tall))
   const styles: Record<SubtitleStyle, string> = {
     // &HAABBGGRR
     bold: `Style: Default,Arial,${base},${primary},${secondary},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${Math.max(2, Math.round(base / 9))},0,${alignment},40,40,${margin(0.08)},1`,

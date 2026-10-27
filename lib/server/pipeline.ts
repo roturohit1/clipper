@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { getConfig, MISSING_KEY_MESSAGE } from './config'
+import { outputSize, videoFilterGraph } from '../aspect'
 import { DEFAULT_CAPTION_OPTIONS } from '../captions'
 import { emojisForLines } from './emoji'
 import { downloadFromUrl } from './ingest'
@@ -173,6 +174,11 @@ async function run_(job: JobRecord) {
 
   // 5. Render
   const caption = { ...DEFAULT_CAPTION_OPTIONS, ...job.options.captions }
+  // output frame: older jobs (no aspect saved) keep the source size
+  const aspect = job.options.aspect ?? 'original'
+  const aspectFit = job.options.aspectFit ?? 'crop'
+  const out = outputSize(aspect, info.width, info.height)
+  const capFps = info.fps > 30.5
   job.clips = []
   for (let i = 0; i < plans.length; i++) {
     const plan = plans[i]
@@ -194,15 +200,18 @@ async function run_(job: JobRecord) {
       emojis = result.emojis
       if (result.note) warn(job, `Emoji captions used the keyword fallback for clip ${n} (${result.note}).`)
     }
-    const ass = transcript && caption.enabled ? buildAss(transcript.segments, plan.start, plan.end, job.options.subtitleStyle, info.width, info.height, caption, emojis, sequential) : null
+    const ass = transcript && caption.enabled ? buildAss(transcript.segments, plan.start, plan.end, job.options.subtitleStyle, out.width, out.height, caption, emojis, sequential) : null
     if (ass) fs.writeFileSync(path.join(dir, assName), ass)
 
     const render = async (withCaptions: boolean) => {
       const args = ['-y', '-v', 'error', '-nostats', '-progress', 'pipe:1', '-ss', plan.start.toFixed(2), '-i', source]
       // the last contiguous part runs to the end of the file, so no rounding of -t can drop its final frames
       if (!(sequential && i === plans.length - 1)) args.push('-t', duration.toFixed(2))
-      if (withCaptions) args.push('-vf', `ass=${assName}`) // relative name + cwd avoids Windows drive-letter escaping problems
-      args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', path.join('clips', outName))
+      // relative ASS name + cwd avoids Windows drive-letter escaping problems; captions are drawn at the output size
+      const graph = videoFilterGraph({ aspect, fit: aspectFit, width: out.width, height: out.height, capFps, ass: withCaptions ? assName : null })
+      args.push('-filter_complex', graph, '-map', '[v]', '-map', '0:a:0?')
+      args.push('-c:v', 'libx264', '-profile:v', 'high', '-level', '4.2', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p')
+      args.push('-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-movflags', '+faststart', path.join('clips', outName))
       return run(cfg.ffmpegPath, args, {
         cwd: dir,
         onStdoutLine: (line) => {

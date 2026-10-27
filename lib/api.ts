@@ -1,4 +1,5 @@
 import { DEFAULT_CAPTION_OPTIONS, type CaptionOptions } from './captions'
+import type { Aspect, AspectFit } from './aspect'
 import type { ClipMode } from './clip-mode'
 
 export type JobStatus = 'queued' | 'processing' | 'completed' | 'failed'
@@ -48,7 +49,7 @@ export type AppConfig = {
   notices: string[]
 }
 
-export type JobOptions = { clipLength: number; subtitleStyle: string; clipMode?: ClipMode; captions?: CaptionOptions }
+export type JobOptions = { clipLength: number; subtitleStyle: string; clipMode?: ClipMode; aspect?: Aspect; aspectFit?: AspectFit; captions?: CaptionOptions }
 
 /** Caption options as the snake_case API fields (colours are #RRGGBB or omitted for the style default). */
 function captionFields(captions: CaptionOptions = DEFAULT_CAPTION_OPTIONS): Record<string, string> {
@@ -98,6 +99,8 @@ class ApiClient {
     body.append('clip_length', String(options.clipLength))
     body.append('subtitle_style', options.subtitleStyle)
     if (options.clipMode) body.append('clip_mode', options.clipMode)
+    if (options.aspect) body.append('aspect', options.aspect)
+    if (options.aspectFit) body.append('aspect_fit', options.aspectFit)
     for (const [key, value] of Object.entries(captionFields(options.captions))) body.append(key, value)
     body.append('video', file) // keep the file last so the server can validate options before streaming it
     return this.normalize(await this.request<Job>('/api/jobs/upload', { method: 'POST', body }))
@@ -107,7 +110,7 @@ class ApiClient {
       await this.request<Job>('/api/jobs/url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, clip_length: options.clipLength, subtitle_style: options.subtitleStyle, ...(options.clipMode ? { clip_mode: options.clipMode } : {}), ...captionFields(options.captions) }),
+        body: JSON.stringify({ url, clip_length: options.clipLength, subtitle_style: options.subtitleStyle, ...(options.clipMode ? { clip_mode: options.clipMode } : {}), ...(options.aspect ? { aspect: options.aspect } : {}), ...(options.aspectFit ? { aspect_fit: options.aspectFit } : {}), ...captionFields(options.captions) }),
       }),
     )
   }

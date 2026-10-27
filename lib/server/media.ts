@@ -1,7 +1,7 @@
 import { getConfig } from './config'
 import { currentSignal, run } from './proc'
 
-export type MediaInfo = { duration: number; width: number; height: number; hasAudio: boolean; hasVideo: boolean }
+export type MediaInfo = { duration: number; width: number; height: number; hasAudio: boolean; hasVideo: boolean; fps: number }
 
 export async function probe(file: string): Promise<MediaInfo> {
   const { ffprobePath } = getConfig()
@@ -9,7 +9,7 @@ export async function probe(file: string): Promise<MediaInfo> {
   if (r.code !== 0) throw new Error('This file could not be read as a video. It may be corrupted or in an unsupported format.')
   const data = JSON.parse(r.stdout) as {
     format?: { duration?: string }
-    streams?: Array<{ codec_type?: string; width?: number; height?: number; duration?: string }>
+    streams?: Array<{ codec_type?: string; width?: number; height?: number; duration?: string; avg_frame_rate?: string; r_frame_rate?: string; tags?: { rotate?: string }; side_data_list?: Array<{ rotation?: number }> }>
   }
   const streams = data.streams ?? []
   const video = streams.find((s) => s.codec_type === 'video')
@@ -17,7 +17,16 @@ export async function probe(file: string): Promise<MediaInfo> {
   const duration = Number(data.format?.duration ?? video?.duration ?? audio?.duration ?? 0)
   if (!video) throw new Error('No video stream found in this file.')
   if (!Number.isFinite(duration) || duration <= 0) throw new Error('Could not determine the video duration.')
-  return { duration, width: video.width || 1280, height: video.height || 720, hasAudio: Boolean(audio), hasVideo: true }
+  const rate = (value?: string) => {
+    const [n, d] = String(value ?? '').split('/').map(Number)
+    return n > 0 && d > 0 ? n / d : 0
+  }
+  const fps = rate(video.avg_frame_rate) || rate(video.r_frame_rate)
+  // phone videos are often stored sideways with a rotation flag; ffmpeg rotates them, so swap the size to match what is rendered
+  const rotation = Math.abs(Number(video.side_data_list?.find((d) => d.rotation !== undefined)?.rotation ?? video.tags?.rotate ?? 0)) % 180
+  const width = video.width || 1280
+  const height = video.height || 720
+  return { duration, width: rotation === 90 ? height : width, height: rotation === 90 ? width : height, hasAudio: Boolean(audio), hasVideo: true, fps }
 }
 
 /** 16 kHz mono low-bitrate MP3: small enough for the 25 MB API upload limit in 10-minute chunks. */
