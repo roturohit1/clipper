@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { parseCaptionOptions } from '../captions'
 import { parseClipMode } from '../clip-mode'
 import { enqueue } from './pipeline'
-import { saveJob, type JobRecord } from './store'
+import { allocateProject, saveJob, type JobRecord } from './store'
 
 export const jsonError = (message: string, status = 400) => NextResponse.json({ detail: message }, { status, headers: { 'Cache-Control': 'no-store' } })
 
@@ -16,12 +16,16 @@ export function parseOptions(clipLength: unknown, subtitleStyle: unknown, captio
 }
 
 export function newJob(options: JobRecord['options'], source: JobRecord['source'], sourceName: string, id = randomUUID()): JobRecord {
+  const project = allocateProject(id, sourceName)
   const job: JobRecord = {
     id,
     status: 'queued',
     progress: 0,
     stage: 'Queued',
     sourceName,
+    projectName: project.projectName,
+    projectNumber: project.projectNumber,
+    folder: project.folder,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     options,

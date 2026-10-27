@@ -53,18 +53,29 @@ export default function Page() {
   const [error, setError] = useState('')
   const [dragging, setDragging] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [view, setView] = useState<'workspace' | 'history'>('workspace')
+  const [creating, setCreating] = useState(false)
+  const [openingFolder, setOpeningFolder] = useState(false)
   const [config, setConfig] = useState<AppConfig | null>(null)
-  const [history, setHistory] = useState<Job[]>([])
+  const [projects, setProjects] = useState<Job[]>([])
 
   const active = job?.status === 'queued' || job?.status === 'processing'
   const jobId = job?.id
+  const projectLabel = (item: Job) => item.projectName || (item.sourceName || 'Untitled project').replace(VIDEO_EXT, '')
+
+  const loadProjects = useCallback(() => {
+    return apiClient.listJobs().then((items) => {
+      setProjects(items)
+      setJob((current) => (current ? items.find((item) => item.id === current.id) ?? current : current))
+    }).catch((caught) => setError(caught instanceof Error ? caught.message : 'Unable to load projects.'))
+  }, [])
 
   useEffect(() => {
     apiClient.getConfig().then(setConfig).catch(() => setConfig(null))
+    void loadProjects()
     const last = window.localStorage.getItem(LAST_JOB_KEY)
-    if (last) apiClient.getJob(last).then(setJob).catch(() => window.localStorage.removeItem(LAST_JOB_KEY))
-  }, [])
+    if (last) apiClient.getJob(last).then(setJob).catch(() => { window.localStorage.removeItem(LAST_JOB_KEY); setCreating(true) })
+    else setCreating(true)
+  }, [loadProjects])
 
   // Poll the job until it finishes.
   useEffect(() => {
@@ -78,17 +89,43 @@ export default function Page() {
     return () => window.clearInterval(timer)
   }, [jobId, active])
 
-  const loadHistory = useCallback(() => apiClient.listJobs().then(setHistory).catch((caught) => setError(caught instanceof Error ? caught.message : 'Unable to load history.')), [])
-  useEffect(() => { if (view === 'history') void loadHistory() }, [view, loadHistory])
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey)) return
-      if (event.key === '1') { event.preventDefault(); setView('workspace') }
-      if (event.key === '2') { event.preventDefault(); setView('history') }
+    if (!job) return
+    setProjects((current) => {
+      const index = current.findIndex((item) => item.id === job.id)
+      if (index === -1) return [job, ...current]
+      const next = current.slice()
+      next[index] = job
+      return next
+    })
+  }, [job])
+
+  const projectPending = projects.some((item) => item.status === 'queued' || item.status === 'processing')
+  useEffect(() => {
+    if (!projectPending) return
+    const timer = window.setInterval(() => { void loadProjects() }, 2500)
+    return () => window.clearInterval(timer)
+  }, [projectPending, loadProjects])
+
+  const openProject = (item: Job) => {
+    setCreating(false)
+    setError('')
+    setJob(item)
+    window.localStorage.setItem(LAST_JOB_KEY, item.id)
+    apiClient.getJob(item.id).then(setJob).catch((caught) => setError(caught instanceof Error ? caught.message : 'Unable to open this project.'))
+  }
+
+  const openFolder = async () => {
+    if (!job) return
+    setOpeningFolder(true)
+    try {
+      await apiClient.openProjectFolder(job.id)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to open the project folder.')
+    } finally {
+      setOpeningFolder(false)
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }
   const normalizedUrl = (() => {
     const value = url.trim()
     if (!value) return ''
@@ -141,6 +178,7 @@ export default function Page() {
         ? await apiClient.createUploadJob(file!, options)
         : await apiClient.createUrlJob(normalizedUrl, options)
       setJob(nextJob)
+      setCreating(false)
       window.localStorage.setItem(LAST_JOB_KEY, nextJob.id)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to submit this job.')
@@ -160,29 +198,43 @@ export default function Page() {
   return (
     <main className="min-h-screen bg-background text-foreground">
       <div className="mx-auto flex min-h-screen max-w-[1500px] flex-col lg:flex-row">
-        <aside className="flex w-full shrink-0 flex-col border-b border-border/70 bg-sidebar/70 px-5 py-5 lg:w-[230px] lg:border-b-0 lg:border-r lg:px-4">
+        <aside className="flex max-h-[46vh] w-full shrink-0 flex-col border-b border-border/70 bg-sidebar/70 px-5 py-5 lg:sticky lg:top-0 lg:h-screen lg:max-h-none lg:w-[300px] lg:border-b-0 lg:border-r lg:px-4">
           <div className="flex items-center gap-3 px-2">
             <div className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground text-sm font-bold">C</div>
             <div><p className="font-semibold tracking-tight">Cutline</p><p className="text-[11px] text-muted-foreground">AI video studio</p></div>
           </div>
-          <nav className="mt-8 flex gap-2 lg:flex-col" aria-label="Main navigation">
-            <button onClick={() => setView('workspace')} className={`flex flex-1 items-center gap-3 rounded-xl px-3 py-2.5 text-sm lg:flex-none ${view === 'workspace' ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground transition hover:bg-muted/60 hover:text-foreground'}`}>Workspace <span className="ml-auto hidden text-[10px] text-muted-foreground lg:inline">⌘ 1</span></button>
-            <button onClick={() => setView('history')} className={`flex flex-1 items-center gap-3 rounded-xl px-3 py-2.5 text-sm lg:flex-none ${view === 'history' ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground transition hover:bg-muted/60 hover:text-foreground'}`}>History <span className="ml-auto hidden text-[10px] lg:inline">⌘ 2</span></button>
+          <button onClick={() => { setCreating(true); setError('') }} className={`mt-6 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm ${creating ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground transition hover:bg-muted/60 hover:text-foreground'}`}>+ New project</button>
+          <p className="mt-6 px-2 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Projects</p>
+          <nav className="mt-2 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pb-2" aria-label="Projects">
+            {projects.length ? projects.map((item) => {
+              const selected = !creating && job?.id === item.id
+              const count = item.clips?.length ?? 0
+              const when = item.createdAt ? new Date(item.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : item.status
+              return (
+                <button key={item.id} onClick={() => openProject(item)} className={`flex items-center gap-3 rounded-xl px-2.5 py-2 text-left ${selected ? 'bg-primary/10 text-primary' : 'text-foreground transition hover:bg-muted/60'}`}>
+                  <span className={`grid size-8 shrink-0 place-items-center rounded-lg text-[10px] font-semibold ${selected ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{item.projectNumber ? String(item.projectNumber).padStart(2, '0') : '•'}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{projectLabel(item)}</span>
+                    <span className={`mt-0.5 block truncate text-[11px] ${selected ? 'text-primary/80' : 'text-muted-foreground'}`}>{count} {count === 1 ? 'video' : 'videos'} · {when}</span>
+                  </span>
+                </button>
+              )
+            }) : <p className="px-2 py-3 text-xs leading-5 text-muted-foreground">No projects yet. Each video you create gets its own folder.</p>}
           </nav>
-          <div className="mt-auto hidden rounded-2xl border border-border/70 bg-card p-4 lg:block">
-            <p className="text-xs font-medium">Built for the scroll</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Turn long-form video into clips worth sharing.</p>
-          </div>
         </aside>
 
         <section className="min-w-0 flex-1">
           <header className="flex items-center justify-between border-b border-border/70 px-5 py-4 md:px-9">
-            <div><p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">{view === 'workspace' ? 'Workspace' : 'History'}</p><h1 className="mt-1 text-lg font-semibold tracking-tight">{view === 'workspace' ? 'Create clips' : 'Past projects'}</h1></div>
-            <div className="flex items-center gap-3"><span className="hidden rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground sm:inline">Pro workspace</span><div className="grid size-8 place-items-center rounded-full bg-muted text-xs font-medium">JD</div></div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">{creating ? 'New project' : job?.projectNumber ? `Project ${String(job.projectNumber).padStart(3, '0')}` : 'Project'}</p>
+              <h1 className="mt-1 truncate text-lg font-semibold tracking-tight">{creating ? 'Create clips' : job ? projectLabel(job) : 'Choose a project'}</h1>
+            </div>
+            <div className="flex items-center gap-3"><span className="hidden rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground sm:inline">{projects.length} {projects.length === 1 ? 'project' : 'projects'}</span><div className="grid size-8 place-items-center rounded-full bg-muted text-xs font-medium">JD</div></div>
           </header>
 
           <div className="mx-auto max-w-5xl px-5 py-8 md:px-9 md:py-11">
-            {view === 'history' ? <section className="rounded-2xl border border-border/80 bg-card/40 p-5 md:p-6"><p className="text-sm font-semibold">Past projects</p>{history.length ? <ul className="mt-4 flex flex-col gap-2">{history.map((item) => <li key={item.id}><button onClick={() => { setJob(item); setError(''); window.localStorage.setItem(LAST_JOB_KEY, item.id); setView('workspace') }} className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3 text-left transition hover:border-primary/50"><span className="min-w-0"><span className="block truncate text-sm font-medium">{item.sourceName || item.id}</span><span className="mt-1 block text-[11px] text-muted-foreground">{item.createdAt ? new Date(item.createdAt).toLocaleString() : ''} · {item.clips?.length ?? 0} clips</span></span><span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">{item.status}</span></button></li>)}</ul> : <p className="mt-4 text-sm text-muted-foreground">No projects yet. Create your first set of clips from the workspace.</p>}{error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">{error}</p>}</section> : <>
-            <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="mb-2 text-sm font-medium text-primary">New project</p><h2 className="max-w-xl text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Find the moments people will remember.</h2></div><p className="max-w-xs text-sm leading-6 text-muted-foreground">Upload a recording or paste any public video link. Cutline handles the rest.</p></div>
+            {creating ? <>
+            <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="mb-2 text-sm font-medium text-primary">New project</p><h2 className="max-w-xl text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Find the moments people will remember.</h2></div><p className="max-w-xs text-sm leading-6 text-muted-foreground">This video becomes one project. Every clip is saved in that project’s folder. The next video gets a new folder.</p></div>
 
             {config?.notices.length ? <div role="status" className="mb-5 rounded-xl border border-border bg-card/60 px-4 py-3 text-xs leading-5 text-muted-foreground">{config.notices.map((notice) => <p key={notice}>• {notice}</p>)}</div> : null}
 
@@ -211,11 +263,29 @@ export default function Page() {
                     <label className="flex flex-col gap-2 text-xs font-medium">Letter case<select value={captionForm.uppercase} onChange={(event) => setCaption('uppercase', event.target.value as CaptionForm['uppercase'])} className="h-10 rounded-lg border border-input bg-background px-3 text-sm font-normal outline-none focus:border-primary"><option value="auto">Match style</option><option value="on">UPPERCASE</option><option value="off">As spoken</option></select></label>
                     <label className="flex items-center justify-between gap-3 text-xs font-medium"><span>Emoji captions<span className="mt-0.5 block text-[11px] font-normal text-muted-foreground">AI adds fitting emojis to caption lines</span></span><input type="checkbox" checked={captionForm.emoji} onChange={(event) => setCaption('emoji', event.target.checked)} className="size-4 accent-[var(--primary)]" /></label>
                   </>}
-                </div><button onClick={submit} disabled={isSubmitting || active} className="mt-2 flex h-12 items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60">{isSubmitting ? 'Submitting…' : active ? 'Processing…' : 'Generate clips'}<span className="ml-2">→</span></button><p className="text-center text-[11px] leading-4 text-muted-foreground">Your original file stays private and is processed on your own server.</p></div></section>
+                </div><button onClick={submit} disabled={isSubmitting} className="mt-2 flex h-12 items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60">{isSubmitting ? 'Submitting…' : 'Generate clips'}<span className="ml-2">→</span></button><p className="text-center text-[11px] leading-4 text-muted-foreground">Your original file stays private and is processed on your own server.</p></div></section>
             </div>
-
-            <section className="mt-8 rounded-2xl border border-border/80 bg-card/40 p-5 md:p-6"><div className="flex items-center justify-between"><div><p className="text-sm font-semibold">Latest project</p><p className="mt-1 text-xs text-muted-foreground">{statusLabel}</p></div>{job && <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">{job.status}</span>}</div>{job ? <div className="mt-5"><div className="mb-2 flex justify-between text-xs text-muted-foreground"><span>{job.status === 'failed' ? 'Processing stopped' : job.stage || 'Processing progress'}</span><span>{progress}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${progress}%` }} /></div>{job.status === 'failed' && job.error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">{job.error}</p>}{job.warnings?.length ? <div className="mt-4 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs leading-5 text-muted-foreground">{job.warnings.map((warning) => <p key={warning}>• {warning}</p>)}</div> : null}{job.clips?.length ? <div className="mt-6 grid gap-4 sm:grid-cols-2"><p className="col-span-full text-sm font-medium">Generated clips</p>{orderedClips.map((clip, index) => <article key={clip.id} className="overflow-hidden rounded-xl border border-border bg-background"><video controls preload="metadata" src={clip.previewUrl} className="aspect-video w-full bg-black" /><div className="flex items-center justify-between gap-3 p-3"><div><p className="text-xs font-medium">Clip {index + 1}: {clip.title}</p><p className="mt-1 text-[11px] text-muted-foreground">{clip.durationSeconds}s · {clip.sourceEndSeconds !== undefined ? `${clip.sourceStartSeconds}s–${clip.sourceEndSeconds}s` : `${clip.sourceStartSeconds}s`} source{clip.captioned ? ' · captions' : ''}</p>{clip.reason && <p className="mt-1 text-[11px] leading-4 text-muted-foreground/80">{clip.reason}</p>}</div><a href={clip.downloadUrl} download className="rounded-lg bg-muted px-3 py-2 text-xs font-semibold hover:bg-muted/70">Download</a></div></article>)}</div> : <p className="mt-5 text-sm text-muted-foreground">{job.status === 'failed' ? 'No clips were produced.' : 'Clip previews will appear here as soon as they are rendered.'}</p>}</div> : <div className="mt-5 rounded-xl border border-dashed border-border px-5 py-8 text-center"><p className="text-sm font-medium">No project yet</p><p className="mt-1 text-xs text-muted-foreground">Your processing queue and finished clips will appear here.</p></div>}</section>
-            </>}
+            </> : job ? <section className="rounded-2xl border border-border/80 bg-card/40 p-5 md:p-6">
+              <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
+                <div>
+                  <p className="text-sm font-semibold">{projectLabel(job)}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{statusLabel}{job.createdAt ? ` · ${new Date(job.createdAt).toLocaleString()}` : ''}</p>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">All videos from this project are saved in <span className="font-medium text-foreground">{job.clipsFolder || 'this folder'}</span>. The next video you create goes in a new project folder.</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button onClick={() => void openFolder()} disabled={openingFolder} className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-semibold transition hover:border-primary/50 disabled:opacity-60">{openingFolder ? 'Opening…' : 'Open folder'}</button>
+                  <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">{job.status}</span>
+                </div>
+              </div>
+              <div className="mt-5">
+                <div className="mb-2 flex justify-between text-xs text-muted-foreground"><span>{job.status === 'failed' ? 'Processing stopped' : job.stage || 'Processing progress'}</span><span>{progress}%</span></div>
+                <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${progress}%` }} /></div>
+                {job.status === 'failed' && job.error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">{job.error}</p>}
+                {job.warnings?.length ? <div className="mt-4 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs leading-5 text-muted-foreground">{job.warnings.map((warning) => <p key={warning}>• {warning}</p>)}</div> : null}
+                {error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">{error}</p>}
+                {orderedClips.length ? <div className="mt-6 grid gap-4 sm:grid-cols-2"><p className="col-span-full text-sm font-medium">Videos in this project</p>{orderedClips.map((clip, index) => <article key={clip.id} className="overflow-hidden rounded-xl border border-border bg-background"><video controls preload="metadata" src={clip.previewUrl} className="aspect-video w-full bg-black" /><div className="flex items-center justify-between gap-3 p-3"><div><p className="text-xs font-medium">Clip {index + 1}: {clip.title}</p><p className="mt-1 text-[11px] text-muted-foreground">{clip.durationSeconds}s · {clip.sourceEndSeconds !== undefined ? `${clip.sourceStartSeconds}s?${clip.sourceEndSeconds}s` : `${clip.sourceStartSeconds}s`} source{clip.captioned ? ' · captions' : ''}</p>{clip.reason && <p className="mt-1 text-[11px] leading-4 text-muted-foreground/80">{clip.reason}</p>}</div><a href={clip.downloadUrl} download className="rounded-lg bg-muted px-3 py-2 text-xs font-semibold hover:bg-muted/70">Download</a></div></article>)}</div> : <p className="mt-5 text-sm text-muted-foreground">{job.status === 'failed' ? 'No videos were produced.' : 'Videos will appear in this project as soon as they are rendered.'}</p>}
+              </div>
+            </section> : <div className="rounded-2xl border border-dashed border-border px-5 py-16 text-center"><p className="text-sm font-medium">No project open</p><p className="mt-1 text-xs text-muted-foreground">Start a new project, or pick one from the list. Each video keeps its clips in its own folder.</p><button onClick={() => setCreating(true)} className="mt-5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">New project</button></div>}
           </div>
         </section>
       </div>

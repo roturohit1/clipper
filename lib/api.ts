@@ -24,6 +24,14 @@ export type Job = {
   error?: string
   warnings?: string[]
   sourceName?: string
+  /** Display name of this video's project. */
+  projectName?: string
+  /** 1-based folder number. Absent on projects created before folders were numbered. */
+  projectNumber?: number
+  /** Folder name under data/projects, such as "001-my-video". */
+  folder?: string
+  /** Where this project's rendered videos are saved, relative to the data directory. */
+  clipsFolder?: string
   createdAt?: string
   transcription?: 'openai' | 'local' | 'none'
   selection?: 'ai' | 'heuristic' | 'sequential'
@@ -109,6 +117,9 @@ class ApiClient {
   async listJobs() {
     const jobs = await this.request<Job[]>('/api/jobs')
     return jobs.map((job) => this.normalize(job))
+  }
+  openProjectFolder(id: string) {
+    return this.request<{ ok: boolean; folder: string }>(`/api/jobs/${encodeURIComponent(id)}/folder`, { method: 'POST' })
   }
 }
 

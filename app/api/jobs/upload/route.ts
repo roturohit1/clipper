@@ -6,7 +6,7 @@ import { Readable } from 'node:stream'
 import { NextResponse } from 'next/server'
 import { getConfig } from '@/lib/server/config'
 import { enqueue, jsonError, newJob, parseOptions } from '@/lib/server/http'
-import { ensureJobDir, jobDir, toPublic } from '@/lib/server/store'
+import { allocateProject, removeJobFiles, toPublic } from '@/lib/server/store'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,7 +43,14 @@ export async function POST(request: Request) {
         }
         originalName = path.basename(info.filename || 'video')
         savedName = `source${EXT_RE.test(ext) ? ext : '.mp4'}`
-        const dir = ensureJobDir(id)
+        let dir: string
+        try {
+          dir = allocateProject(id, originalName).dir
+        } catch (error) {
+          stream.resume()
+          reject(error)
+          return
+        }
         const out = fs.createWriteStream(path.join(dir, savedName))
         stream.on('limit', () => {
           tooLarge = true
@@ -67,7 +74,7 @@ export async function POST(request: Request) {
     enqueue(job.id)
     return NextResponse.json(toPublic(job), { status: 202 })
   } catch (error) {
-    fs.rmSync(jobDir(id), { recursive: true, force: true })
+    removeJobFiles(id)
     const status = (error as { status?: number }).status ?? 400
     return jsonError(error instanceof Error ? error.message : 'Upload failed.', status)
   }
