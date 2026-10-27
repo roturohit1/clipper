@@ -140,3 +140,6 @@ For a speech test video you can record yourself or use any short talking clip.
 | "Local Whisper is not available" | `python -m pip install faster-whisper "av<17"` or fix `LOCAL_WHISPER_PYTHON` |
 | "yt-dlp is not installed" | Install yt-dlp or paste a direct video file link |
 | Captions missing but job succeeded | Check the yellow/grey warnings under the job; no speech detected or no transcription provider |
+=======
+# clipper
+this is fully clipper tool that create clips videos from large videos 
