@@ -30,9 +30,9 @@ export async function probe(file: string): Promise<MediaInfo> {
 }
 
 /** 16 kHz mono low-bitrate MP3: small enough for the 25 MB API upload limit in 10-minute chunks. */
-export async function extractAudio(input: string, output: string) {
+export async function extractAudio(input: string, output: string, range?: { start: number; duration: number }) {
   const { ffmpegPath } = getConfig()
-  const r = await run(ffmpegPath, ['-y', '-v', 'error', '-i', input, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '32k', output])
+  const r = await run(ffmpegPath, ['-y', '-v', 'error', ...(range ? ['-ss', range.start.toFixed(2), '-t', range.duration.toFixed(2)] : []), '-i', input, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '32k', output])
   if (r.code !== 0) throw new Error(`Audio extraction failed: ${r.stderr.trim().split('\n').pop()}`)
 }
 
@@ -72,4 +72,12 @@ export async function loudnessPerSecond(input: string): Promise<number[]> {
       resolve(out)
     })
   })
+}
+
+/** Duration in seconds of an audio file (0 when it cannot be read). */
+export async function audioDuration(file: string): Promise<number> {
+  const { ffprobePath } = getConfig()
+  const r = await run(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file])
+  const value = Number(r.stdout.trim())
+  return r.code === 0 && Number.isFinite(value) ? value : 0
 }

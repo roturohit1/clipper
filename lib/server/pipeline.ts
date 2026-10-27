@@ -1,8 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { getConfig, MISSING_KEY_MESSAGE } from './config'
-import { outputSize, videoFilterGraph } from '../aspect'
+import { croppedSize, outputSize, videoFilterGraph } from '../aspect'
+import { audioFilterGraph, buildWatermarkAss, logoOverlayPosition, watermarkLayout } from '../branding'
 import { DEFAULT_CAPTION_OPTIONS } from '../captions'
+import { logoAspect, logoPath, musicPath } from './assets'
 import { emojisForLines } from './emoji'
 import { downloadFromUrl } from './ingest'
 import { extractAudio, probe } from './media'
@@ -115,13 +117,22 @@ async function run_(job: JobRecord) {
   const info = await probe(source)
   assertActive(job)
 
+  // Trim: clip only the window [from, to] of the source. Audio, transcript and clip selection all work in window time
+  // (0 = trim start); only the ffmpeg seek and the saved source times add `from` back.
+  const trim = job.options.trim
+  const from = Math.min(Math.max(0, trim?.start ?? 0), info.duration)
+  const to = trim?.end && trim.end > 0 ? Math.min(trim.end, info.duration) : info.duration
+  const windowDuration = to - from
+  if (windowDuration < 3) throw new Error('Trim leaves less than 3 seconds of video. Check the trim start and end.')
+  const trimmed = from > 0 || to < info.duration - 0.05
+
   // 3. Audio + transcription
   let transcript: Transcript | null = null
   let audioFile: string | null = null
   if (info.hasAudio) {
     update(job, 18, 'Extracting audio')
     audioFile = path.join(dir, 'audio.mp3')
-    await extractAudio(source, audioFile)
+    await extractAudio(source, audioFile, trimmed ? { start: from, duration: windowDuration } : undefined)
     const provider = await resolveProvider()
     if (provider === 'none') {
       job.transcription = 'none'
@@ -145,17 +156,17 @@ async function run_(job: JobRecord) {
   assertActive(job)
   update(job, 52, 'Choosing the best moments')
   const target = job.options.clipLength
-  const count = clipCountFor(info.duration, target, cfg.maxClips)
+  const count = clipCountFor(windowDuration, target, cfg.maxClips)
   let plans: ClipPlan[] = []
   const wantAI = cfg.selectionProvider !== 'heuristic'
   const sequential = job.options.clipMode === 'sequential'
   if (sequential) {
     // contiguous parts 0-L, L-2L, ... to the end of the video: no AI, no clip cap
-    plans = selectSequential(info.duration, target)
+    plans = selectSequential(windowDuration, target)
     job.selection = 'sequential'
   } else if (transcript && wantAI && cfg.apiKey) {
     try {
-      plans = await selectWithAI(transcript, info.duration, target, count)
+      plans = await selectWithAI(transcript, windowDuration, target, count)
       if (plans.length) job.selection = 'ai'
       else warn(job, 'The AI returned no usable clips; used the audio-energy fallback instead.')
     } catch (error) {
@@ -167,7 +178,7 @@ async function run_(job: JobRecord) {
     warn(job, 'AI clip selection is off because OPENAI_API_KEY is not set. Clips were chosen by audio energy and speech density.')
   }
   if (!plans.length) {
-    plans = await selectHeuristic(audioFile, info.hasAudio, transcript, info.duration, target, count)
+    plans = await selectHeuristic(audioFile, info.hasAudio, transcript, windowDuration, target, count)
     job.selection = 'heuristic'
   }
   if (!plans.length) throw new Error('Could not find any clip in this video.')
@@ -177,46 +188,84 @@ async function run_(job: JobRecord) {
   // output frame: older jobs (no aspect saved) keep the source size
   const aspect = job.options.aspect ?? 'original'
   const aspectFit = job.options.aspectFit ?? 'crop'
-  const out = outputSize(aspect, info.width, info.height)
+  const cropped = croppedSize(info.width, info.height, job.options.crop)
+  const out = outputSize(aspect, cropped.width, cropped.height)
   const capFps = info.fps > 30.5
+
+  // own watermark (logo from data/branding and/or text), placed after the output fit; captions keep clear of it
+  const wm = job.options.watermark
+  const logoFile = wm?.logo ? logoPath() : null
+  if (wm?.logo && !logoFile) warn(job, 'The saved logo was not found, so no logo was added.')
+  const wmLayout = wm && (logoFile || wm.text) ? watermarkLayout(wm, out.width, Boolean(logoFile), logoAspect()) : null
+  const wmAss = wm && wm.text && wmLayout ? 'watermark.ass' : null
+  if (wm && wmLayout && wmAss) fs.writeFileSync(path.join(dir, wmAss), buildWatermarkAss(wm, wmLayout, out.width, out.height))
+  const captionClear = wmLayout && caption.position !== 'middle' && caption.position === wmLayout.edge ? wmLayout.occupiedPx + Math.round(out.height * 0.01) : 0
+
+  // music (from data/music): replace the source audio, or mix it under the voice
+  const audio = job.options.audio
+  const musicFile = audio && audio.mode !== 'original' && audio.musicId ? musicPath(audio.musicId) : null
+  if (audio && audio.mode !== 'original' && !musicFile) warn(job, 'The chosen music track was not found, so the original audio was kept.')
   job.clips = []
   for (let i = 0; i < plans.length; i++) {
     const plan = plans[i]
     const n = i + 1
-    const from = 55 + (i / plans.length) * 44
+    const pctFrom = 55 + (i / plans.length) * 44
     const span = 44 / plans.length
     const stage = `Rendering clip ${n} of ${plans.length}`
     assertActive(job)
-    update(job, from, stage)
+    update(job, pctFrom, stage)
 
     const outName = `clip-${n}.mp4`
     const duration = plan.end - plan.start
     const assName = `clip-${n}.ass`
     let emojis: string[] = []
     if (transcript && caption.enabled && caption.emoji) {
-      update(job, from, `Adding emojis to clip ${n} captions`)
+      update(job, pctFrom, `Adding emojis to clip ${n} captions`)
       const lines = captionLines(transcript.segments, plan.start, plan.end, caption, sequential)
       const result = await emojisForLines(lines)
       emojis = result.emojis
       if (result.note) warn(job, `Emoji captions used the keyword fallback for clip ${n} (${result.note}).`)
     }
-    const ass = transcript && caption.enabled ? buildAss(transcript.segments, plan.start, plan.end, job.options.subtitleStyle, out.width, out.height, caption, emojis, sequential) : null
+    const ass = transcript && caption.enabled ? buildAss(transcript.segments, plan.start, plan.end, job.options.subtitleStyle, out.width, out.height, caption, emojis, sequential, captionClear) : null
     if (ass) fs.writeFileSync(path.join(dir, assName), ass)
 
     const render = async (withCaptions: boolean) => {
-      const args = ['-y', '-v', 'error', '-nostats', '-progress', 'pipe:1', '-ss', plan.start.toFixed(2), '-i', source]
+      const args = ['-y', '-v', 'error', '-nostats', '-progress', 'pipe:1', '-ss', (plan.start + from).toFixed(2), '-i', source]
+      let nextInput = 1
+      let logoInput = 0
+      if (logoFile && wmLayout) {
+        args.push('-i', logoFile)
+        logoInput = nextInput++
+      }
+      let musicInput = 0
+      if (musicFile) {
+        args.push('-stream_loop', '-1', '-i', musicFile) // loop short tracks; the graph trims to the clip length
+        musicInput = nextInput++
+      }
       // the last contiguous part runs to the end of the file, so no rounding of -t can drop its final frames
-      if (!(sequential && i === plans.length - 1)) args.push('-t', duration.toFixed(2))
+      if (!(sequential && i === plans.length - 1 && to >= info.duration - 0.05)) args.push('-t', duration.toFixed(2))
       // relative ASS name + cwd avoids Windows drive-letter escaping problems; captions are drawn at the output size
-      const graph = videoFilterGraph({ aspect, fit: aspectFit, width: out.width, height: out.height, capFps, ass: withCaptions ? assName : null })
-      args.push('-filter_complex', graph, '-map', '[v]', '-map', '0:a:0?')
+      const videoGraph = videoFilterGraph({
+        aspect,
+        fit: aspectFit,
+        width: out.width,
+        height: out.height,
+        capFps,
+        ass: withCaptions ? assName : null,
+        crop: job.options.crop,
+        watermarkAss: wmAss,
+        logo: logoFile && wmLayout && wm ? { input: logoInput, width: wmLayout.logoWidth, opacity: wm.opacity / 100, ...logoOverlayPosition(wm.position, wmLayout.marginPx) } : undefined,
+      })
+      const audioGraph = musicFile && audio ? audioFilterGraph({ mode: audio.mode, music: musicInput, hasVoice: info.hasAudio, volumePct: audio.volumePct, duration }) : null
+      args.push('-filter_complex', audioGraph ? `${videoGraph};${audioGraph}` : videoGraph, '-map', '[v]', '-map', audioGraph ? '[a]' : '0:a:0?')
+      if (audioGraph) args.push('-shortest')
       args.push('-c:v', 'libx264', '-profile:v', 'high', '-level', '4.2', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p')
       args.push('-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-movflags', '+faststart', path.join('clips', outName))
       return run(cfg.ffmpegPath, args, {
         cwd: dir,
         onStdoutLine: (line) => {
           const m = /^out_time_(?:us|ms)=(\d+)/.exec(line)
-          if (m) update(job, from + Math.min(1, Number(m[1]) / 1e6 / duration) * span, stage)
+          if (m) update(job, pctFrom + Math.min(1, Number(m[1]) / 1e6 / duration) * span, stage)
         },
       })
     }
@@ -235,8 +284,8 @@ async function run_(job: JobRecord) {
       title: plan.title,
       reason: plan.reason,
       durationSeconds: Math.round(duration),
-      sourceStartSeconds: Math.round(plan.start * 100) / 100,
-      sourceEndSeconds: Math.round(plan.end * 100) / 100,
+      sourceStartSeconds: Math.round((plan.start + from) * 100) / 100,
+      sourceEndSeconds: Math.round((plan.end + from) * 100) / 100,
       previewUrl: `/api/jobs/${job.id}/clips/clip-${n}`,
       downloadUrl: `/api/jobs/${job.id}/clips/clip-${n}?download=1`,
       captioned,

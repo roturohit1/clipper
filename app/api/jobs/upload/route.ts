@@ -30,7 +30,7 @@ export async function POST(request: Request) {
 
   try {
     await new Promise<void>((resolve, reject) => {
-      const parser = busboy({ headers: Object.fromEntries(request.headers), limits: { files: 1, fileSize: cfg.maxUploadBytes, fields: 20 } })
+      const parser = busboy({ headers: Object.fromEntries(request.headers), limits: { files: 1, fileSize: cfg.maxUploadBytes, fields: 80 } })
       parser.on('field', (name, value) => {
         fields[name] = value
       })

@@ -98,6 +98,8 @@ export function buildAss(
   caption: CaptionOptions = DEFAULT_CAPTION_OPTIONS,
   emojis: string[] = [],
   strict = false,
+  /** minimum distance from the top/bottom frame edge, used to keep captions clear of a watermark */
+  minEdgeMargin = 0,
 ): string | null {
   const cues = clipCues(segments, clipStart, clipEnd, caption, strict)
   if (!cues.length) return null
@@ -114,7 +116,7 @@ export function buildAss(
   const alignment = caption.position === 'top' ? 8 : caption.position === 'middle' ? 5 : 2
   // tall frames (9:16) get a bigger bottom/top margin so captions clear the Reels / Shorts interface
   const tall = height / width > 1.4 ? 1.5 : 1
-  const margin = (ratio: number) => (caption.position === 'middle' ? 0 : Math.round(height * ratio * tall))
+  const margin = (ratio: number) => (caption.position === 'middle' ? 0 : Math.max(minEdgeMargin, Math.round(height * ratio * tall)))
   const styles: Record<SubtitleStyle, string> = {
     // &HAABBGGRR
     bold: `Style: Default,Arial,${base},${primary},${secondary},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${Math.max(2, Math.round(base / 9))},0,${alignment},40,40,${margin(0.08)},1`,
