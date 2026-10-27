@@ -9,11 +9,13 @@ RUN apt-get update \
 RUN (apt-get update && apt-get install -y --no-install-recommends fonts-symbola && rm -rf /var/lib/apt/lists/*) || true
 RUN fc-cache -f
 
-# yt-dlp for YouTube-style links (direct .mp4 links and uploads do not need it).
+# yt-dlp for YouTube-style links (direct .mp4 links and uploads do not need it). Always the latest at build time.
 RUN python3 -m venv /opt/yt-dlp-venv \
  && /opt/yt-dlp-venv/bin/pip install --no-cache-dir "yt-dlp[default]" \
  && ln -s /opt/yt-dlp-venv/bin/yt-dlp /usr/local/bin/yt-dlp \
- && echo '--js-runtimes node' > /etc/yt-dlp.conf
+ && echo '--js-runtimes node' > /etc/yt-dlp.conf \
+ && chown -R node:node /opt/yt-dlp-venv
+# The venv belongs to the app user so start.sh can upgrade yt-dlp at boot (YouTube changes often).
 
 RUN npm install -g pnpm
 

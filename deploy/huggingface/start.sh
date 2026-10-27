@@ -6,6 +6,11 @@ if [ -z "$DATA_DIR" ]; then
   if [ -d /data ] && [ -w /data ]; then DATA_DIR=/data/cutline; else DATA_DIR=/tmp/cutline; fi
 fi
 mkdir -p "$DATA_DIR"
+# Keep yt-dlp current: YouTube breaks old versions often. Disable with YTDLP_AUTO_UPDATE=0.
+if [ "${YTDLP_AUTO_UPDATE:-1}" != "0" ]; then
+  timeout 90 /opt/yt-dlp-venv/bin/pip install --quiet --disable-pip-version-check -U "yt-dlp[default]" >/dev/null 2>&1 \
+    && echo "yt-dlp $(/opt/yt-dlp-venv/bin/yt-dlp --version)" || echo "yt-dlp upgrade skipped"
+fi
 export DATA_DIR
 echo "Cutline: data in $DATA_DIR, port ${PORT:-7860}"
 [ -n "$OPENAI_API_KEY" ] || echo "WARNING: OPENAI_API_KEY is not set. Add it as a Space secret to enable captions and AI clip choice."
