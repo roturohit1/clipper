@@ -49,7 +49,7 @@ export const DEFAULT_EXTRAS: ExtrasForm = {
   cropLeft: '',
   cropRight: '',
   audioMode: 'original',
-  copyrightSafe: false,
+  copyrightSafe: true, // on by default in the form; the API default stays false
   musicId: '',
   musicVolume: String(DEFAULT_MUSIC_VOLUME),
 }
