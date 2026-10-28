@@ -40,7 +40,8 @@ export type TrimOptions = {
 // ---------- audio ----------
 export const AUDIO_MODES = ['original', 'replace', 'mix'] as const
 export type AudioMode = (typeof AUDIO_MODES)[number]
-export type AudioOptions = { mode: AudioMode; musicId?: string; /** 0..100 */ volumePct: number }
+export type AudioOptions = { mode: AudioMode; musicId?: string; /** 0..100 */ volumePct: number; /** copyright-safe audio: the original sound is removed and licensed music from data/music is used (auto-picked per clip when musicId is empty) */ copyrightSafe?: boolean }
+export const EMPTY_MUSIC_LIBRARY_MESSAGE = "Copyright-safe audio needs a licensed music track, and your music library is empty. Upload a free licensed track (YouTube Audio Library or Pixabay Music) under Audio, then try again."
 export const DEFAULT_MUSIC_VOLUME = 60
 export const MUSIC_ID_RE = /^[a-f0-9]{16}$/
 export const MUSIC_FADE_SECONDS = 1.5
@@ -95,11 +96,28 @@ export function parseCropEdges(input: Record<string, unknown>): CropEdges | unde
   return crop.top || crop.bottom || crop.left || crop.right ? crop : undefined
 }
 
+/** Accepts true/false, "true"/"false", "1"/"0", "on"/"off", "yes"/"no". Blank means false. */
+function parseFlag(value: unknown, name: string): boolean {
+  if (blank(value)) return false
+  if (typeof value === 'boolean') return value
+  const text = String(value).trim().toLowerCase()
+  if (['true', '1', 'on', 'yes'].includes(text)) return true
+  if (['false', '0', 'off', 'no'].includes(text)) return false
+  throw new Error(`${name} must be true or false.`)
+}
+
 /** Music id existence is checked on the server; this only validates the shape. */
 export function parseAudio(input: Record<string, unknown>): AudioOptions {
+  const copyrightSafe = parseFlag(input.copyright_safe_audio, 'copyright_safe_audio')
+  const volumePct = num(input.music_volume, DEFAULT_MUSIC_VOLUME, 0, 100, 'music_volume')
+  if (copyrightSafe) {
+    // forced replace: the source audio is never kept or mixed. No track chosen means the server auto-picks one per clip.
+    const chosen = blank(input.music_id) ? '' : String(input.music_id).trim().toLowerCase()
+    if (chosen && !MUSIC_ID_RE.test(chosen)) throw new Error('music_id is not a valid track id.')
+    return { mode: 'replace', musicId: chosen || undefined, volumePct, copyrightSafe: true }
+  }
   const mode = blank(input.audio_mode) ? 'original' : String(input.audio_mode).trim().toLowerCase()
   if (!(AUDIO_MODES as readonly string[]).includes(mode)) throw new Error('audio_mode must be original, replace, or mix.')
-  const volumePct = num(input.music_volume, DEFAULT_MUSIC_VOLUME, 0, 100, 'music_volume')
   if (mode === 'original') return { mode: 'original', volumePct }
   const musicId = blank(input.music_id) ? '' : String(input.music_id).trim().toLowerCase()
   if (!MUSIC_ID_RE.test(musicId)) throw new Error('Choose a music track for audio_mode ' + mode + ' (music_id).')

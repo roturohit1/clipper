@@ -2,9 +2,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { getConfig, MISSING_KEY_MESSAGE } from './config'
 import { croppedSize, outputSize, videoFilterGraph } from '../aspect'
-import { audioFilterGraph, buildWatermarkAss, logoOverlayPosition, watermarkLayout } from '../branding'
+import { audioFilterGraph, buildWatermarkAss, EMPTY_MUSIC_LIBRARY_MESSAGE, logoOverlayPosition, watermarkLayout } from '../branding'
 import { DEFAULT_CAPTION_OPTIONS } from '../captions'
-import { logoAspect, logoPath, musicPath } from './assets'
+import { listMusic, logoAspect, logoPath, musicPath } from './assets'
 import { emojisForLines } from './emoji'
 import { downloadFromUrl } from './ingest'
 import { extractAudio, probe } from './media'
@@ -203,8 +203,15 @@ async function run_(job: JobRecord) {
 
   // music (from data/music): replace the source audio, or mix it under the voice
   const audio = job.options.audio
-  const musicFile = audio && audio.mode !== 'original' && audio.musicId ? musicPath(audio.musicId) : null
-  if (audio && audio.mode !== 'original' && !musicFile) warn(job, 'The chosen music track was not found, so the original audio was kept.')
+  const chosenMusic = audio && audio.mode !== 'original' && audio.musicId ? musicPath(audio.musicId) : null
+  const copyrightSafe = Boolean(audio?.copyrightSafe)
+  // copyright-safe audio: the source sound is always dropped. With no chosen track, rotate through the library from a random
+  // start so consecutive clips get different tracks (and a different one on every job).
+  const library = copyrightSafe ? listMusic().map((track) => musicPath(track.id)).filter((file): file is string => Boolean(file)) : []
+  if (copyrightSafe && !chosenMusic && !library.length) throw new Error(EMPTY_MUSIC_LIBRARY_MESSAGE)
+  const libraryStart = library.length ? Math.floor(Math.random() * library.length) : 0
+  if (audio && audio.mode !== 'original' && !chosenMusic && !copyrightSafe) warn(job, 'The chosen music track was not found, so the original audio was kept.')
+  if (copyrightSafe && audio?.musicId && !chosenMusic) warn(job, 'The chosen music track was not found, so tracks from your music library were picked automatically.')
   job.clips = []
   for (let i = 0; i < plans.length; i++) {
     const plan = plans[i]
@@ -215,6 +222,7 @@ async function run_(job: JobRecord) {
     assertActive(job)
     update(job, pctFrom, stage)
 
+    const musicFile = chosenMusic ?? (copyrightSafe && library.length ? library[(libraryStart + i) % library.length] : null)
     const outName = `clip-${n}.mp4`
     const duration = plan.end - plan.start
     const assName = `clip-${n}.ass`
@@ -256,7 +264,7 @@ async function run_(job: JobRecord) {
         watermarkAss: wmAss,
         logo: logoFile && wmLayout && wm ? { input: logoInput, width: wmLayout.logoWidth, opacity: wm.opacity / 100, ...logoOverlayPosition(wm.position, wmLayout.marginPx) } : undefined,
       })
-      const audioGraph = musicFile && audio ? audioFilterGraph({ mode: audio.mode, music: musicInput, hasVoice: info.hasAudio, volumePct: audio.volumePct, duration }) : null
+      const audioGraph = musicFile && audio ? audioFilterGraph({ mode: copyrightSafe ? 'replace' : audio.mode, music: musicInput, hasVoice: info.hasAudio, volumePct: audio.volumePct, duration }) : null
       args.push('-filter_complex', audioGraph ? `${videoGraph};${audioGraph}` : videoGraph, '-map', '[v]', '-map', audioGraph ? '[a]' : '0:a:0?')
       if (audioGraph) args.push('-shortest')
       args.push('-c:v', 'libx264', '-profile:v', 'high', '-level', '4.2', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p')

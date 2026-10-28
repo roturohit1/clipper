@@ -6,6 +6,7 @@ import {
   AUDIO_MODES,
   DEFAULT_MUSIC_VOLUME,
   DEFAULT_WATERMARK,
+  EMPTY_MUSIC_LIBRARY_MESSAGE,
   WATERMARK_POSITIONS,
   WATERMARK_POSITION_LABELS,
   type AudioMode,
@@ -29,6 +30,7 @@ export type ExtrasForm = {
   cropLeft: string
   cropRight: string
   audioMode: AudioMode
+  copyrightSafe: boolean
   musicId: string
   musicVolume: string
 }
@@ -47,6 +49,7 @@ export const DEFAULT_EXTRAS: ExtrasForm = {
   cropLeft: '',
   cropRight: '',
   audioMode: 'original',
+  copyrightSafe: false,
   musicId: '',
   musicVolume: String(DEFAULT_MUSIC_VOLUME),
 }
@@ -68,7 +71,9 @@ export function extrasToOptions(form: ExtrasForm): Pick<JobOptions, 'watermark' 
     watermark,
     trim: start > 0 || end > 0 ? { start, end } : undefined,
     crop: crop.top || crop.bottom || crop.left || crop.right ? crop : undefined,
-    audio: { mode: form.audioMode, musicId: form.audioMode === 'original' ? undefined : form.musicId, volumePct: num(form.musicVolume, DEFAULT_MUSIC_VOLUME) },
+    audio: form.copyrightSafe
+      ? { mode: 'replace', musicId: form.musicId || undefined, volumePct: num(form.musicVolume, DEFAULT_MUSIC_VOLUME), copyrightSafe: true }
+      : { mode: form.audioMode, musicId: form.audioMode === 'original' ? undefined : form.musicId, volumePct: num(form.musicVolume, DEFAULT_MUSIC_VOLUME) },
   }
 }
 
@@ -202,14 +207,19 @@ export function ExtrasPanels({ value, onChange }: { value: ExtrasForm; onChange:
 
       <div className={group}>
         <div><p className="text-sm font-semibold">Audio</p><p className="mt-1 text-xs text-muted-foreground">Keep the original sound, replace it with music, or mix music under the voice.</p></div>
-        <label className={label}>Audio<select value={value.audioMode} onChange={(event) => set({ audioMode: event.target.value as AudioMode })} className={field}>
-          {AUDIO_MODES.map((mode) => <option key={mode} value={mode}>{mode === 'original' ? 'Original audio' : mode === 'replace' ? 'Replace with music (drop the source audio)' : 'Mix: keep the voice, music ducks under it'}</option>)}
+        <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-muted/30 p-3">
+          <label className="flex items-center gap-2 text-xs font-semibold"><input type="checkbox" role="switch" checked={value.copyrightSafe} onChange={(event) => set({ copyrightSafe: event.target.checked })} />Copyright-safe audio</label>
+          <p className={hint}>Removes original sound and uses your licensed music. Video footage can still be claimed if you don&apos;t own it.</p>
+          {value.copyrightSafe && !tracks.length ? <p role="alert" className="text-[11px] leading-4 text-destructive">{EMPTY_MUSIC_LIBRARY_MESSAGE}</p> : null}
+        </div>
+        <label className={label}>Audio<select value={value.copyrightSafe ? 'replace' : value.audioMode} disabled={value.copyrightSafe} onChange={(event) => set({ audioMode: event.target.value as AudioMode })} className={`${field} disabled:opacity-60`}>
+          {AUDIO_MODES.map((mode) => <option key={mode} value={mode} disabled={value.copyrightSafe && mode !== 'replace'}>{mode === 'original' ? 'Original audio' : mode === 'replace' ? 'Replace with music (drop the source audio)' : 'Mix: keep the voice, music ducks under it'}</option>)}
         </select></label>
-        {value.audioMode !== 'original' ? (
+        {value.copyrightSafe || value.audioMode !== 'original' ? (
           <>
             <label className={label}>Track
               <select value={value.musicId} onChange={(event) => set({ musicId: event.target.value })} className={field}>
-                <option value="">{tracks.length ? 'Choose a track...' : 'No tracks yet. Upload one below.'}</option>
+                <option value="">{!tracks.length ? 'No tracks yet. Upload one below.' : value.copyrightSafe ? 'Auto-pick from my library (different track per clip)' : 'Choose a track...'}</option>
                 {tracks.map((track) => <option key={track.id} value={track.id}>{track.name} ({minutes(track.durationSeconds)})</option>)}
               </select>
             </label>

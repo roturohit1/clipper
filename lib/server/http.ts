@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { parseCaptionOptions } from '../captions'
 import { parseAspect, parseAspectFit } from '../aspect'
-import { parseAudio, parseCropEdges, parseTrim, parseWatermark } from '../branding'
+import { EMPTY_MUSIC_LIBRARY_MESSAGE, parseAudio, parseCropEdges, parseTrim, parseWatermark } from '../branding'
 import { parseClipMode } from '../clip-mode'
-import { logoPath, musicPath } from './assets'
+import { listMusic, logoPath, musicPath } from './assets'
 import { enqueue } from './pipeline'
 import { allocateProject, saveJob, type JobRecord } from './store'
 
@@ -18,7 +18,9 @@ export function parseOptions(clipLength: unknown, subtitleStyle: unknown, captio
   const watermark = parseWatermark(captionInput)
   if (watermark?.logo && !logoPath()) throw new Error('Upload a logo first (Branding), or turn the logo off.')
   const audio = parseAudio(captionInput)
-  if (audio.mode !== 'original' && !(audio.musicId && musicPath(audio.musicId))) throw new Error('The chosen music track was not found. Upload it again or pick another.')
+  if (audio.copyrightSafe && !listMusic().length) throw new Error(EMPTY_MUSIC_LIBRARY_MESSAGE)
+  if (audio.mode !== 'original' && audio.musicId && !musicPath(audio.musicId)) throw new Error('The chosen music track was not found. Upload it again or pick another.')
+  if (audio.mode !== 'original' && !audio.musicId && !audio.copyrightSafe) throw new Error('The chosen music track was not found. Upload it again or pick another.')
   return { clipLength: Math.round(length), subtitleStyle: style, clipMode: parseClipMode(captionInput.clip_mode), aspect: parseAspect(captionInput.aspect), aspectFit: parseAspectFit(captionInput.aspect_fit), captions: parseCaptionOptions(captionInput), watermark, trim: parseTrim(captionInput), crop: parseCropEdges(captionInput), audio } as JobRecord['options']
 }
 

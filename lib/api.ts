@@ -91,6 +91,7 @@ function extraFields(options: JobOptions): Record<string, string> {
     fields.audio_mode = options.audio.mode
     fields.music_volume = String(options.audio.volumePct)
     if (options.audio.musicId) fields.music_id = options.audio.musicId
+    if (options.audio.copyrightSafe) fields.copyright_safe_audio = 'true'
   }
   return fields
 }
